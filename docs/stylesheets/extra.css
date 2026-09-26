@@ -1,0 +1,41 @@
+:root {
+  --rat-ink: #202334;
+  --rat-moss: #b8df69;
+}
+
+[data-md-color-scheme="slate"] {
+  --md-default-bg-color: #171a28;
+  --md-primary-fg-color: #302848;
+  --md-accent-fg-color: var(--rat-moss);
+}
+
+.md-typeset h1 {
+  font-weight: 750;
+  letter-spacing: -.035em;
+}
+
+.hero-line {
+  border-left: .25rem solid #b8df69;
+  padding: .6rem 1rem;
+  margin: 1.4rem 0;
+  font-size: 1.2rem;
+  font-weight: 600;
+  background: rgba(144, 113, 195, .1);
+}
+
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  gap: .9rem;
+  margin: 1.5rem 0;
+}
+
+.feature-card {
+  padding: .9rem 1rem;
+  border: 1px solid rgba(144, 113, 195, .3);
+  border-radius: .5rem;
+  background: rgba(144, 113, 195, .07);
+}
+
+.feature-card h3 { margin-top: .1rem; }
+.feature-card p { margin-bottom: .2rem; }

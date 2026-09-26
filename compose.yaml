@@ -1,0 +1,10 @@
+services:
+  synthetic-audit-demo:
+    build: .
+    ports:
+      - "127.0.0.1:8765:8765"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      PORT: "8765"

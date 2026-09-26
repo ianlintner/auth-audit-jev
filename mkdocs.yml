@@ -1,0 +1,57 @@
+site_name: Rat Intelligence | Auth Audit Jev
+site_description: A privacy-conscious, shadow-mode audit of OAuth events. Advisory signals, not access decisions.
+site_url: https://ianlintner.github.io/auth-audit-jev/
+repo_url: https://github.com/ianlintner/auth-audit-jev
+repo_name: ianlintner/auth-audit-jev
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  language: en
+  icon:
+    logo: material/radar
+  palette:
+    - scheme: slate
+      primary: deep purple
+      accent: lime
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+    - scheme: default
+      primary: deep purple
+      accent: deep purple
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - content.code.copy
+
+nav:
+  - Overview: index.md
+  - Getting started: getting-started.md
+  - How it works: architecture.md
+  - Alerts and limits: alerts.md
+  - Privacy and threat model: privacy.md
+  - Integration roadmap: integrations.md
+  - Measuring latency: measurement.md
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+
+extra_css:
+  - stylesheets/extra.css
+
+plugins:
+  - search
+
+copyright: Rat Intelligence is an experimental, observation-only project. No authorization decisions are made here.
