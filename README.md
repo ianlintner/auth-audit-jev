@@ -40,6 +40,44 @@ await plugin.start()
 
 `start()` stays disabled when no key is configured (unless a test transport is explicitly injected). `health_check()` reflects an active worker. `close()` cancels work, drops pending jobs, and never waits on the cloud. `join()` drains accepted jobs for tests/graceful administration; do not call it in an OAuth request handler. A callback must be fast and nonblocking; it is invoked in the worker and exceptions are counted, not logged. If an alert needs persistent delivery, pass the safe alert to a separate controlled observability service; no raw payload is retained here.
 
+## The opt-in v1 signal layer
+
+The legacy plugin above is unchanged. Alongside it, this repo carries a second,
+**opt-in** layer for the question the three-field projection cannot answer: is a
+failure a routine user error, a misconfigured OAuth client, or possible abuse?
+
+The producer attaches a versioned `authn_signal` object built only from reviewed
+coarse enums, bounded count/time buckets and tri-state booleans — no free-text
+field exists in the schema, so there is nothing to redact. See
+[docs/signal-schema.md](docs/signal-schema.md) for the contract and the upstream
+fields that do not exist yet.
+
+```python
+from auth_audit_jev import SignalAuditPlugin
+
+# Shadow only: emit() never awaits the provider, and a result is never enforcement.
+plugin = SignalAuditPlugin(alert=lambda safe: safe_alert_sink(safe), enabled=True)
+await plugin.start()
+# on shutdown: await plugin.close()
+```
+
+Classification has three separate authorities, deliberately not merged: producer
+facts, deterministic local candidates (an unregistered client or a missing
+redirect URI is computed here, never asked of the model), and the advisory
+provider category. When the local candidates and the provider disagree, the
+alert carries `candidate_conflict` rather than silently picking a side. The
+provider is asked one batched request; a category is accepted only above its own
+threshold (`suspected_abuse` 0.90, `ambiguous` 0.90, `user_error` 0.85,
+`client_misconfiguration` 0.80), and a provider that self-declares low confidence
+may only return `user_error`. Anything else abstains from a fixed enum of
+reasons, so no provider text or exception message can enter a label.
+
+Calibration and every fixture are **synthetic and offline**; agreement with
+fixture labels is a plumbing check, not accuracy. The v1 layer is disabled by
+default, its `user_error` category counts a distinct `routine_failure` label so
+it never collides with the legacy `routine` counter, and enabling it changes no
+existing alert meaning.
+
 ## Privacy and decision boundary
 
 `project_event` recognizes the Rust/Python OAuth event enum literals plus six **canonical, opt-in IAM outcome literals** (`authentication_failed`, `authentication_succeeded`, `authorization_denied`, `authorization_allowed`, `permission_denied`, `access_denied`) and severity `info`, `warning`, `error`. IAM producers must map into these names explicitly; the OAuth servers do not yet emit them. The cloud-bound `state` contains exactly `event_kind`, `severity`, and an outcome enum derived from the event kind (`failure`, `success`, `observed`). It does **not** inspect, hash, copy, or serialize `id`, `user_id`, `client_id`, IP, token, header, timestamp, `metadata`, `error`, correlation, idempotency or trace context; unknown event types and severities are skipped. The outcome enum is only an event-type heuristic, not an independent verdict on access. Consequently, an individual event cannot establish attack patterns, velocity, account takeover, or authorization correctness. For more useful detection, upstream should compute rigorously privacy-reviewed, bounded numeric/bool aggregates and explicitly extend the allowlist with tests; never forward raw metadata.
