@@ -33,6 +33,7 @@ nav:
   - Overview: index.md
   - Getting started: getting-started.md
   - How it works: architecture.md
+  - Signal schema: signal-schema.md
   - Alerts and limits: alerts.md
   - Privacy and threat model: privacy.md
   - Integration roadmap: integrations.md

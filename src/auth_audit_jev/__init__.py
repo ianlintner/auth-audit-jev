@@ -1,4 +1,15 @@
-"""Shadow-only auth audit: safe projection, bounded asynchronous Jev assessment."""
+"""Shadow-only auth audit: safe projection, bounded asynchronous Jev assessment.
+
+Public API has two layers that must not be confused:
+
+- the **legacy** at-most-once three-field plugin (`AuditPlugin`), whose alert
+  meaning is unchanged and remains the only one wired to any operator alerting;
+- the **v1** normalized-signal plugin (`SignalAuditPlugin`), which separates
+  routine failures, client misconfiguration and suspected abuse — advisory
+  hypotheses only, disabled by default, with no access-path enforcement.
+
+`authn-signal/v1` (`signal.py`) is the producer contract between them.
+"""
 from __future__ import annotations
 
 import asyncio
@@ -12,6 +23,26 @@ import re
 import threading
 import time
 from urllib.request import Request, build_opener, HTTPSHandler, ProxyHandler, HTTPRedirectHandler
+
+from .calibration import agreement, per_category_metrics
+from .classify import (
+    CATEGORIES,
+    HYPOTHESES,
+    build_request as build_signal_request,
+    baseline_comparison,
+    deterministic_candidates,
+    hypothesis,
+    validate_response,
+)
+from .metrics import Metrics as _Metrics
+from .signal import (
+    MAX_SIGNAL_BYTES,
+    SCHEMA_VERSION,
+    normalize_signal,
+    project_signal,
+    signal_from_legacy_event,
+)
+from .signal_plugin import ABSTENTION_REASONS, SignalAuditPlugin
 
 MODEL = "jev-latest"
 URL = "https://api.typesafe.ai/v1/systemone"
@@ -91,57 +122,13 @@ def validate_answer(payload, min_confidence=.8):
         return None
 
 
-class Metrics:
-    """In-process aggregate measurements; no labels from input or provider."""
-    def __init__(self):
-        self.results = Counter()
-        self.queue_depth = 0
-        self.inflight = 0
-        self.provider_calls = 0
-        self.provider_latency_sum_seconds = 0.0
-        self.provider_latency_max_seconds = 0.0
-        self.latency_buckets = Counter()
-        self.input_tokens = 0
-        self.output_tokens = 0
-        self.cost_usd = 0.0
-        self.last_success_timestamp_seconds = 0.0
+class Metrics(_Metrics):
+    """Legacy alias for the shared aggregate surface in `metrics.py`.
 
-    def observe(self, seconds):
-        self.provider_calls += 1
-        self.provider_latency_sum_seconds += seconds
-        self.provider_latency_max_seconds = max(self.provider_latency_max_seconds, seconds)
-        for bound in (.01, .025, .05, .1, .25, .5, 1, 2, 5):
-            if seconds <= bound:
-                self.latency_buckets[bound] += 1
-
-    def prometheus(self):
-        """Prometheus text exposition; serve behind your protected metrics endpoint."""
-        lines = ["# TYPE auth_audit_events_total counter"]
-        for outcome in ("disabled", "skipped", "queue_full", "expired", "abstain",
-                        "recommendation", "alerted", "alert_error", "routine", "timeout", "error", "shutdown_drop"):
-            lines.append(f'auth_audit_events_total{{outcome="{outcome}"}} {self.results[outcome]}')
-        for name, value in (("queue_depth", self.queue_depth), ("inflight", self.inflight),
-                            ("input_tokens_total", self.input_tokens),
-                            ("output_tokens_total", self.output_tokens),
-                            ("cost_usd_total", self.cost_usd),
-                            ("last_success_timestamp_seconds", self.last_success_timestamp_seconds)):
-            lines.extend((f"# TYPE auth_audit_{name} {'counter' if name.endswith('_total') else 'gauge'}",
-                          f"auth_audit_{name} {value}"))
-        lines.append("# TYPE auth_audit_provider_duration_seconds histogram")
-        for bound in (.01, .025, .05, .1, .25, .5, 1, 2, 5):
-            lines.append(f'auth_audit_provider_duration_seconds_bucket{{le="{bound}"}} {self.latency_buckets[bound]}')
-        lines += [f'auth_audit_provider_duration_seconds_bucket{{le="+Inf"}} {self.provider_calls}',
-                  f"auth_audit_provider_duration_seconds_sum {self.provider_latency_sum_seconds}",
-                  f"auth_audit_provider_duration_seconds_count {self.provider_calls}"]
-        return "\n".join(lines) + "\n"
-
-    def snapshot(self):
-        return {"results": dict(self.results), "queue_depth": self.queue_depth,
-                "inflight": self.inflight, "provider_calls": self.provider_calls,
-                "provider_latency_sum_seconds": self.provider_latency_sum_seconds,
-                "provider_latency_max_seconds": self.provider_latency_max_seconds,
-                "input_tokens": self.input_tokens, "output_tokens": self.output_tokens,
-                "cost_usd": self.cost_usd}
+    The legacy three-field plugin and the v1 signal plugin both expose the same
+    reviewed, low-cardinality counters so one protected scrape endpoint can
+    describe whichever shadow layer is enabled.
+    """
 
 
 class _NoRedirect(HTTPRedirectHandler):
