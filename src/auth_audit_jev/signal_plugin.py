@@ -123,6 +123,9 @@ class SignalAuditPlugin:
         self._kill_switch = False
         self._consecutive_failures = 0
         self._circuit_open_until = 0.0
+        # True while the single half-open probe of a recovering circuit is in
+        # flight, so other workers do not also call the provider.
+        self._probe_inflight = False
 
     # -- lifecycle ------------------------------------------------------------
     async def start(self):
@@ -186,6 +189,30 @@ class SignalAuditPlugin:
         if self._consecutive_failures < self.circuit_failure_threshold:
             return "closed"
         return "open" if now < self._circuit_open_until else "half_open"
+
+    def _admit_request(self, now):
+        """Reserve the right to make a provider call, or refuse.
+
+        Returns True only when the caller may proceed. Closed is always
+        admitted. After the cooldown the circuit is `half_open`, and exactly one
+        caller is admitted as the probe; every other caller is refused until
+        that probe resolves (success closes the circuit via
+        `_consecutive_failures = 0`, failure re-opens it). Without this guard
+        every worker observes the expired cooldown independently and calls the
+        provider at once, which is not one-probe recovery.
+        """
+        if self._consecutive_failures < self.circuit_failure_threshold:
+            return True
+        if now < self._circuit_open_until:
+            return False
+        if self._probe_inflight:
+            return False
+        self._probe_inflight = True
+        return True
+
+    def _settle_request(self):
+        """Release the half-open probe reservation once the request resolves."""
+        self._probe_inflight = False
 
     def clear_cache(self):
         self._cache.clear()
@@ -258,7 +285,7 @@ class SignalAuditPlugin:
         if self._kill_switch:
             self.metrics.results["kill_switch"] += 1
             return
-        if self.circuit_state(now) == "open":
+        if not self._admit_request(now):
             self.metrics.circuit["short_circuited"] += 1
             self.metrics.results["circuit_open"] += 1
             return
@@ -295,10 +322,21 @@ class SignalAuditPlugin:
         except asyncio.TimeoutError:
             self.metrics.results["timeout"] += 1
             self._record_provider_failure()
+        except RuntimeError as exc:
+            # Local backpressure is not a provider fault. The built-in transport
+            # admits one in-flight request; with worker_count > 1 a busy slot
+            # raises here, and counting that as a provider failure would let a
+            # healthy provider's breaker be opened by configuration alone.
+            if "transport busy" in str(exc):
+                self.metrics.results["queue_full"] += 1
+            else:
+                self.metrics.results["error"] += 1
+                self._record_provider_failure()
         except Exception:
             self.metrics.results["error"] += 1
             self._record_provider_failure()
         finally:
+            self._settle_request()
             self.metrics.observe(time.monotonic() - began)
             self.metrics.inflight = max(self.metrics.inflight - 1, 0)
 

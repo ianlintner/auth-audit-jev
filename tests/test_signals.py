@@ -24,6 +24,7 @@ from auth_audit_jev import (
     agreement,
     baseline_comparison,
     build_signal_request,
+    conflicts_with_local_candidates,
     deterministic_candidates,
     normalize_signal,
     per_category_metrics,
@@ -115,6 +116,43 @@ class SchemaTests(unittest.TestCase):
             self.assertNotIn(secret, json.dumps(build_signal_request(
                 normalize_signal(dict(BASE))), sort_keys=True))
 
+    def test_signal_request_builder_has_no_passthrough_escape_hatch(self):
+        """The exported builder must not accept caller-supplied free-form context.
+
+        Regression: `build_request` took an optional `context` and copied it
+        verbatim into the cloud-bound payload. Because it is re-exported as the
+        public `build_signal_request`, any caller could bypass the closed
+        `authn-signal/v1` boundary and send raw identifiers, error text, tokens
+        or arbitrary nested maps to the provider -- exactly what the boundary
+        exists to prevent.
+        """
+        import inspect
+        parameters = set(inspect.signature(build_signal_request).parameters)
+        self.assertEqual(parameters, {"signal"}, "builder grew a passthrough parameter")
+
+        secret_context = {
+            "raw_error": "invalid_grant for SECRET_PRINCIPAL from SECRET_IP",
+            "authorization": "Bearer SECRET_TOKEN",
+            "nested": {"ip": "SECRET_IP"},
+        }
+        with self.assertRaises(TypeError):
+            build_signal_request(normalize_signal(dict(BASE)), context=secret_context)
+
+    def test_signal_request_builder_rejects_an_unnormalized_payload(self):
+        """A dict that never passed normalization must not reach the provider."""
+        with self.assertRaises(ValueError):
+            build_signal_request({"failure_reason": "SECRET_ERROR text",
+                                  "outcome": "failure", "user_id": "SECRET_PRINCIPAL"})
+        with self.assertRaises(ValueError):
+            build_signal_request({"metadata": {"anything": "SECRET_METADATA"}})
+
+    def test_signal_request_builder_payload_stays_inside_the_schema(self):
+        normalized = normalize_signal(dict(BASE))
+        request = build_signal_request(normalized)
+        self.assertEqual(set(request["state"]), {"schema_version", "signal"})
+        self.assertEqual(set(request["state"]["signal"]), set(normalized))
+        self.assertNotIn("context", json.dumps(request, sort_keys=True))
+
     def test_legacy_adapter_cannot_fabricate_a_reason(self):
         derived = signal_from_legacy_event(envelope())
         self.assertEqual(derived["outcome"], "failure")
@@ -152,6 +190,30 @@ class CandidateTests(unittest.TestCase):
     def test_no_local_rule_yields_unclassified(self):
         self.assertEqual(deterministic_candidates({"failure_reason": "other"}),
                          [(None, "unclassified")])
+
+    def test_unclassified_fallback_is_not_a_conflict_with_any_category(self):
+        """A lone `unclassified` fallback is not a local opinion to disagree with.
+
+        Regression: `conflicts_with_local_candidates` filtered out the `None`
+        entry and then returned `all(...)` over an empty iterable, which is
+        vacuously true -- so every provider category was flagged as conflicting
+        with local candidates on exactly the signals where no local rule fired
+        and the provider's answer carries all the information.
+        """
+        candidates = deterministic_candidates({"failure_reason": "invalid_token"})
+        self.assertEqual(candidates, [(None, "unclassified")])
+        for category in CATEGORIES:
+            self.assertFalse(conflicts_with_local_candidates(category, candidates),
+                             msg=category)
+
+    def test_a_real_disagreement_is_still_reported(self):
+        """The guard must not disable the flag it protects."""
+        candidates = deterministic_candidates({"failure_reason": "invalid_redirect_uri",
+                                               "client_config_category": "none"})
+        self.assertIn(("client_misconfiguration", "redirect_uri_mismatch"), candidates)
+        self.assertTrue(conflicts_with_local_candidates("suspected_abuse", candidates))
+        self.assertFalse(conflicts_with_local_candidates("client_misconfiguration", candidates))
+        self.assertFalse(conflicts_with_local_candidates("user_error", []))
 
     def test_ambiguous_and_missing_evidence_are_representable(self):
         self.assertIn("ambiguous", CATEGORIES)
@@ -451,6 +513,39 @@ class SignalPluginTests(unittest.IsolatedAsyncioTestCase):
         await plugin.join()
         await plugin.close()
         self.assertEqual(len(calls), 3)
+
+    async def test_half_open_admits_only_one_probe_with_multiple_workers(self):
+        """Recovery must be a single probe even when several workers are running.
+
+        Regression: `circuit_state()` reported `half_open` once the cooldown
+        elapsed but reserved no probe slot, so with `worker_count > 1` every
+        worker could observe the expired circuit and call the provider at once,
+        defeating one-probe recovery and risking reopening the breaker from a
+        burst of concurrent failures.
+        """
+        calls = []
+
+        async def transport(request):
+            calls.append(request)
+            await asyncio.sleep(.05)
+            raise RuntimeError("provider down")
+
+        plugin = self.plugin(transport=transport, worker_count=4,
+                            circuit_failure_threshold=2, circuit_cooldown=.05)
+        await plugin.start()
+        for bucket in ("1", "2-5", "6-20", "21-100", "100+", "1"):
+            await plugin.emit(envelope(fx.signal(failure_reason="invalid_credentials",
+                                                 count_bucket=bucket)))
+        await asyncio.sleep(.4)
+        self.assertEqual(plugin.circuit_state(), "half_open")
+        admitted = len(calls)
+        for bucket in ("2-5", "6-20", "21-100", "100+"):
+            await plugin.emit(envelope(fx.signal(failure_reason="invalid_credentials",
+                                                 count_bucket=bucket)))
+        await asyncio.sleep(.4)
+        await plugin.close()
+        self.assertEqual(len(calls) - admitted, 1,
+                         "half-open state admitted more than one probe")
 
     async def test_cache_avoids_repeat_calls_and_expires(self):
         transport = fx.offline_transport(lambda request: fx.provider_response("user_error"))

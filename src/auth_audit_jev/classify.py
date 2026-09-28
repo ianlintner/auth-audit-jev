@@ -28,6 +28,7 @@ from .signal import (
     SCHEMA_VERSION,
     AUTHZ_REASONS,
     ROUTINE_USER_ERROR_REASONS,
+    normalize_signal,
 )
 
 CATEGORIES = ("user_error", "client_misconfiguration", "suspected_abuse", "ambiguous", "other")
@@ -186,11 +187,26 @@ def is_authorization_denial(signal):
         signal.get("authz_denial_category", "none") != "none"
 
 
-def build_request(signal, context=None):
-    """Batched, single-shot decision request for one normalized signal."""
-    state = {"schema_version": SCHEMA_VERSION, "signal": signal}
-    if context:
-        state["context"] = context
+def build_request(signal):
+    """Batched, single-shot decision request for one normalized signal.
+
+    There is deliberately no `context`/passthrough parameter. Everything that
+    leaves the process is built from the already-normalized signal, whose schema
+    admits only reviewed coarse enums, bounded count/time buckets and tri-state
+    booleans. An exported free-form `context` argument would let a caller copy
+    raw identifiers, error text, IPs, tokens or arbitrary maps straight into the
+    cloud-bound payload, defeating the closed `authn-signal/v1` boundary that
+    the rest of this module exists to enforce. Callers that need an extra field
+    must add it to the schema in `signal.py`, where it is validated, bounded and
+    reviewable.
+
+    `signal` must already be normalized; `normalize_signal` is applied here as a
+    cheap idempotent guard so an un-normalized dict cannot be smuggled in.
+    """
+    normalized = normalize_signal(dict(signal))
+    if normalized is None:
+        raise ValueError("signal is not a valid authn-signal/v1 payload")
+    state = {"schema_version": SCHEMA_VERSION, "signal": normalized}
     return {"model": "jev-latest", "state": state, "questions": QUESTIONS}
 
 
@@ -278,10 +294,18 @@ def conflicts_with_local_candidates(category, candidates):
 
     Surfaced as metadata so a reviewer can see the disagreement instead of the
     alert silently picking a side.
+
+    A conflict requires at least one *concrete* local candidate. The fallback
+    entry `(None, "unclassified")` means the local rules explained nothing, so
+    there is no local opinion for the provider to disagree with; treating it as
+    one would mark every otherwise-valid provider category as conflicting and
+    make the flag useless (and misleading) on exactly the signals that need the
+    provider most.
     """
-    if not candidates:
+    concrete = [c for c in candidates if c[0] is not None]
+    if not concrete:
         return False
-    return all(c[0] != category for c in candidates if c[0] is not None)
+    return all(c[0] != category for c in concrete)
 
 
 # How the legacy three-field boundary would have read the same signal. It only

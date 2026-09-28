@@ -30,6 +30,7 @@ from .classify import (
     HYPOTHESES,
     build_request as build_signal_request,
     baseline_comparison,
+    conflicts_with_local_candidates,
     deterministic_candidates,
     hypothesis,
     validate_response,
