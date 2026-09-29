@@ -1,0 +1,346 @@
+{
+  "abstains": 2,
+  "agreement": 0.8823529411764706,
+  "dedup_counters": {
+    "abstain_from_dedup": 15,
+    "evicted": 0,
+    "expired": 0,
+    "observed": 21,
+    "potential_missed_signal": 0,
+    "refreshed": 0,
+    "suppressed": 2
+  },
+  "disclaimer": "SIMULATION: offline, deterministic synthetic evaluation. No live service is contacted and no paid provider request is made.",
+  "escalations_evaluated": 2,
+  "escalations_hidden": [],
+  "escalations_must_evaluate": 2,
+  "false_negative_events": [
+    "fn_trap_provider_says_user_error_on_spray"
+  ],
+  "false_negatives": 1,
+  "false_positive_events": [
+    "fp_trap_provider_says_abuse_on_stale_secret"
+  ],
+  "false_positives": 1,
+  "gate_result": "PASS",
+  "gates": {
+    "abstains_present": true,
+    "dedup_saves_calls": true,
+    "dedup_state_is_bounded": true,
+    "escalations_never_hidden": true,
+    "false_negative_trap_detected": true,
+    "false_positive_trap_detected": true,
+    "no_cross_principal_collapse": true,
+    "queue_drops_are_counted_not_blocking": true,
+    "unavailable_metrics_marked": true
+  },
+  "metrics_snapshot": {
+    "categories": {
+      "client_misconfiguration": 3,
+      "suspected_abuse": 5,
+      "user_error": 9
+    },
+    "circuit": {
+      "closed": 17
+    },
+    "confidence_levels": {
+      "high": 17
+    },
+    "cost_usd": 0.0,
+    "dedup": {
+      "abstain_from_dedup": 15,
+      "evicted": 0,
+      "expired": 0,
+      "observed": 21,
+      "potential_missed_signal": 0,
+      "refreshed": 0,
+      "suppressed": 2
+    },
+    "inflight": 0,
+    "input_tokens": 0,
+    "local_candidate_kinds": {
+      "client_configuration": 2,
+      "configuration_expiry": 2,
+      "configuration_gap": 1,
+      "conflict_with_provider": 2,
+      "distributed_repetition": 4,
+      "expired_credential": 1,
+      "invalid_client_registration": 3,
+      "invalid_credentials": 10,
+      "redirect_uri_mismatch": 1,
+      "token_replay_indicator": 1,
+      "unclassified": 2
+    },
+    "output_tokens": 0,
+    "provider_avoided": 0,
+    "provider_calls": 19,
+    "provider_latency_max_seconds": 5.012401379644871e-05,
+    "provider_latency_sum_seconds": 0.000389119959436357,
+    "queue_depth": 0,
+    "results": {
+      "abstain": 2,
+      "alerted": 17,
+      "baseline_agree": 5,
+      "baseline_disagree": 12,
+      "candidate_conflict": 2,
+      "recommendation": 17,
+      "routine_failure": 9
+    },
+    "urgency_levels": {
+      "routine_review": 17
+    }
+  },
+  "no_alert_outcomes": 4,
+  "not_measured": {
+    "event_to_alert_latency": "no event source, bus, or wall clock is attached in offline mode",
+    "inline_request_path_effect": "shadow-only; nothing here touches an authorization decision",
+    "live_jev_confidence": "no live provider call is made; the fake provider returns fixed labels",
+    "live_provider_accuracy": "synthetic fixture labels are not ground truth about real traffic",
+    "production_p99_latency": "worker-side offline durations are a plumbing proxy, not request p99",
+    "provider_cost_usd": "offline fake usage is zero; no paid request occurs",
+    "real_traffic_precision_recall": "corpus is invented and small; not a population estimate"
+  },
+  "offline_latency": {
+    "max_seconds": 5.0124e-05,
+    "mean_seconds": 2.048e-05,
+    "note": "observed offline worker-side durations; NOT production request p99",
+    "samples": 19,
+    "sum_seconds": 0.00038912
+  },
+  "per_category": {
+    "abstained": 1,
+    "categories": {
+      "ambiguous": {
+        "precision": null,
+        "predicted": 0,
+        "recall": null,
+        "support": 0,
+        "true_positive": 0
+      },
+      "client_misconfiguration": {
+        "precision": 1.0,
+        "predicted": 3,
+        "recall": 0.6,
+        "support": 5,
+        "true_positive": 3
+      },
+      "other": {
+        "precision": null,
+        "predicted": 0,
+        "recall": null,
+        "support": 0,
+        "true_positive": 0
+      },
+      "suspected_abuse": {
+        "precision": 0.8,
+        "predicted": 5,
+        "recall": 0.8,
+        "support": 5,
+        "true_positive": 4
+      },
+      "user_error": {
+        "precision": 0.8888888888888888,
+        "predicted": 9,
+        "recall": 1.0,
+        "support": 8,
+        "true_positive": 8
+      }
+    },
+    "total": 18
+  },
+  "provider_calls_baseline": 21,
+  "provider_calls_dedup": 19,
+  "provider_calls_saved": 2,
+  "queue_drops": 0,
+  "queue_pressure": {
+    "emit_never_blocked": true,
+    "emits": 10,
+    "max_emit_seconds": 9.658979251980782e-06,
+    "note": "offline probe with a stalled fake provider; no network",
+    "queue_drops": 7,
+    "queue_size": 2
+  },
+  "scenario_verdicts": [
+    {
+      "evaluated": true,
+      "expected": "user_error",
+      "name": "user_error_single_typo",
+      "observed": "user_error",
+      "provider_choice": "user_error",
+      "suppressed": false
+    },
+    {
+      "evaluated": true,
+      "expected": "user_error",
+      "name": "user_error_expired_credential",
+      "observed": "user_error",
+      "provider_choice": "user_error",
+      "suppressed": false
+    },
+    {
+      "evaluated": true,
+      "expected": "user_error",
+      "name": "user_error_lockout_after_typos",
+      "observed": "user_error",
+      "provider_choice": "user_error",
+      "suppressed": false
+    },
+    {
+      "evaluated": true,
+      "expected": "client_misconfiguration",
+      "name": "misconfig_unregistered_client",
+      "observed": "client_misconfiguration",
+      "provider_choice": "client_misconfiguration",
+      "suppressed": false
+    },
+    {
+      "evaluated": true,
+      "expected": "client_misconfiguration",
+      "name": "misconfig_expired_client_secret",
+      "observed": "client_misconfiguration",
+      "provider_choice": "client_misconfiguration",
+      "suppressed": false
+    },
+    {
+      "evaluated": true,
+      "expected": "client_misconfiguration",
+      "name": "misconfig_missing_redirect_uri",
+      "observed": "client_misconfiguration",
+      "provider_choice": "client_misconfiguration",
+      "suppressed": false
+    },
+    {
+      "evaluated": true,
+      "expected": "suspected_abuse",
+      "name": "abuse_credential_stuffing_burst",
+      "observed": "suspected_abuse",
+      "provider_choice": "suspected_abuse",
+      "suppressed": false
+    },
+    {
+      "evaluated": true,
+      "expected": "suspected_abuse",
+      "name": "abuse_distributed_spray",
+      "observed": "suspected_abuse",
+      "provider_choice": "suspected_abuse",
+      "suppressed": false
+    },
+    {
+      "evaluated": true,
+      "expected": "suspected_abuse",
+      "name": "abuse_token_replay",
+      "observed": "suspected_abuse",
+      "provider_choice": "suspected_abuse",
+      "suppressed": false
+    },
+    {
+      "evaluated": true,
+      "expected": null,
+      "name": "abstain_provider_returns_residual",
+      "observed": null,
+      "provider_choice": "other",
+      "suppressed": false
+    },
+    {
+      "evaluated": true,
+      "expected": "client_misconfiguration",
+      "name": "abstain_provider_malformed",
+      "observed": null,
+      "provider_choice": "abstain",
+      "suppressed": false
+    },
+    {
+      "evaluated": true,
+      "expected": "client_misconfiguration",
+      "name": "fp_trap_provider_says_abuse_on_stale_secret",
+      "observed": "suspected_abuse",
+      "provider_choice": "suspected_abuse",
+      "suppressed": false
+    },
+    {
+      "evaluated": true,
+      "expected": "suspected_abuse",
+      "name": "fn_trap_provider_says_user_error_on_spray",
+      "observed": "user_error",
+      "provider_choice": "user_error",
+      "suppressed": false
+    },
+    {
+      "evaluated": true,
+      "expected": "user_error",
+      "name": "repeat_first_observation",
+      "observed": "user_error",
+      "provider_choice": "user_error",
+      "suppressed": false
+    },
+    {
+      "evaluated": false,
+      "expected": null,
+      "name": "repeat_exact_repeat_1",
+      "observed": null,
+      "provider_choice": "user_error",
+      "suppressed": true
+    },
+    {
+      "evaluated": false,
+      "expected": null,
+      "name": "repeat_exact_repeat_2",
+      "observed": null,
+      "provider_choice": "user_error",
+      "suppressed": true
+    },
+    {
+      "evaluated": true,
+      "expected": "user_error",
+      "name": "escalation_first_observation",
+      "observed": "user_error",
+      "provider_choice": "user_error",
+      "suppressed": false
+    },
+    {
+      "evaluated": true,
+      "expected": "suspected_abuse",
+      "name": "escalation_crossed_threshold",
+      "observed": "suspected_abuse",
+      "provider_choice": "suspected_abuse",
+      "suppressed": false
+    },
+    {
+      "evaluated": true,
+      "expected": "user_error",
+      "name": "stranger_same_signal_new_principal",
+      "observed": "user_error",
+      "provider_choice": "user_error",
+      "suppressed": false
+    },
+    {
+      "evaluated": true,
+      "expected": "user_error",
+      "name": "no_tenant_first",
+      "observed": "user_error",
+      "provider_choice": "user_error",
+      "suppressed": false
+    },
+    {
+      "evaluated": true,
+      "expected": "user_error",
+      "name": "no_tenant_exact_repeat",
+      "observed": "user_error",
+      "provider_choice": "user_error",
+      "suppressed": false
+    }
+  ],
+  "scenarios": 21,
+  "seed": 0,
+  "simulated": true,
+  "state_bounds": {
+    "bounded": true,
+    "capacity": 8,
+    "distinct_principals": 100,
+    "evicted": 92,
+    "final_size": 8,
+    "potential_missed_signal": 92
+  },
+  "suppression_rate": 0.09523809523809523,
+  "version": "synthetic-eval/v1"
+}
