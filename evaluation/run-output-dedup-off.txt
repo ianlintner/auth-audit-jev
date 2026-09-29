@@ -27,7 +27,7 @@ per-category (offline, synthetic labels):
   other                    support=0   predicted=0   precision=None (no support) recall=None (no support)
 
 observed offline worker latency (NOT request p99):
-  samples=21 mean=0.0000s max=0.0000s
+  samples=21 mean=0.0000s max=0.0001s
 
 queue pressure probe (offline, stalled fake provider):
   queue_size=2 emits=10 drops=7 emit_never_blocked=True

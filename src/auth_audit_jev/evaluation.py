@@ -621,6 +621,7 @@ async def _queue_pressure_probe() -> dict:
             # then the remaining emits fill the bounded queue behind it.
             await asyncio.sleep(0)
     block.set()
+    await plugin.join()  # drain accepted jobs before shutting down the worker
     await plugin.close()
     max_emit_seconds = max(emit_elapsed)
     return {

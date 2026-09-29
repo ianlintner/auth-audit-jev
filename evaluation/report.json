@@ -74,8 +74,8 @@
     "output_tokens": 0,
     "provider_avoided": 0,
     "provider_calls": 19,
-    "provider_latency_max_seconds": 5.012401379644871e-05,
-    "provider_latency_sum_seconds": 0.000389119959436357,
+    "provider_latency_max_seconds": 5.711708217859268e-05,
+    "provider_latency_sum_seconds": 0.0006116002332419157,
     "queue_depth": 0,
     "results": {
       "abstain": 2,
@@ -101,11 +101,11 @@
     "real_traffic_precision_recall": "corpus is invented and small; not a population estimate"
   },
   "offline_latency": {
-    "max_seconds": 5.0124e-05,
-    "mean_seconds": 2.048e-05,
+    "max_seconds": 5.7117e-05,
+    "mean_seconds": 3.2189e-05,
     "note": "observed offline worker-side durations; NOT production request p99",
     "samples": 19,
-    "sum_seconds": 0.00038912
+    "sum_seconds": 0.0006116
   },
   "per_category": {
     "abstained": 1,
@@ -155,7 +155,7 @@
   "queue_pressure": {
     "emit_never_blocked": true,
     "emits": 10,
-    "max_emit_seconds": 9.658979251980782e-06,
+    "max_emit_seconds": 1.0228948667645454e-05,
     "note": "offline probe with a stalled fake provider; no network",
     "queue_drops": 7,
     "queue_size": 2
