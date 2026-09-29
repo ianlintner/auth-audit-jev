@@ -41,6 +41,7 @@ from .classify import (
     validate_response,
 )
 from . import http
+from .dedup import DEDUP_COUNTERS, DECISION_EVALUATE, DedupLayer
 from .http import bounded_transport
 from .metrics import Metrics
 from .signal import SIGNAL_KEY, project_signal, signal_from_legacy_event
@@ -59,6 +60,10 @@ ABSTENTION_REASONS = frozenset({
 def _positive(**limits):
     if any(value <= 0 for value in limits.values()):
         raise ValueError("invalid audit limits")
+
+
+def _field(obj, key):
+    return obj.get(key) if isinstance(obj, dict) else getattr(obj, key, None)
 
 
 def _attached(envelope):
@@ -89,7 +94,8 @@ class SignalAuditPlugin:
                  review_threshold=None, queue_size=32, timeout=1.5, queue_ttl=2.0,
                  max_response_bytes=16384, cache_ttl=30.0, cache_size=64,
                  circuit_failure_threshold=5, circuit_cooldown=30.0,
-                 worker_count=1, metrics=None, legacy_projector=signal_from_legacy_event):
+                 worker_count=1, metrics=None, legacy_projector=signal_from_legacy_event,
+                 dedup=None, tenant=None):
         _positive(queue_size=queue_size, timeout=timeout, queue_ttl=queue_ttl,
                   max_response_bytes=max_response_bytes, cache_size=cache_size,
                   circuit_failure_threshold=circuit_failure_threshold)
@@ -113,6 +119,8 @@ class SignalAuditPlugin:
         self.circuit_cooldown = circuit_cooldown
         self.worker_count = worker_count
         self.legacy_projector = legacy_projector
+        self.dedup = dedup if dedup is not None else DedupLayer()
+        self.tenant = tenant
         # Bounded TTL cache keyed by the normalized signal only — never by an
         # identifier — and cleared on close so no verdict survives a schema or
         # model change.
@@ -198,6 +206,32 @@ class SignalAuditPlugin:
         self.metrics.queue_depth = 0
 
     # -- ingest --------------------------------------------------------------
+    @staticmethod
+    def _scope(envelope):
+        """Producer-owned, opt-in dedup scope: only ``principal``/``client``/
+        ``session`` string keys, read solely to key the in-process fingerprint.
+
+        The scope never leaves this process, is never logged and never sent to
+        the provider. A hostile or malformed envelope yields ``None`` (which is
+        indistinguishable from "no scope provided"), so nothing here can force a
+        merge of unrelated failures.
+        """
+        try:
+            raw = _field(envelope, "dedup_scope")
+        except Exception:
+            return None
+        if not isinstance(raw, dict):
+            return None
+        scope = {}
+        for key in ("principal", "client", "session"):
+            value = raw.get(key)
+            if value is None:
+                continue
+            if not isinstance(value, str):
+                return None
+            scope[key] = value
+        return scope or None
+
     async def emit(self, envelope):
         """Never blocks the caller and never awaits a provider result."""
         if not self.enabled:
@@ -221,8 +255,10 @@ class SignalAuditPlugin:
                 # must be rejected outright, never silently downgraded to the
                 # legacy projection.
                 signal = self.legacy_projector(envelope)
+            scope = self._scope(envelope)
         except Exception:
             signal = None
+            scope = None
         if signal is None:
             self.metrics.results["skipped"] += 1
             return
@@ -232,7 +268,7 @@ class SignalAuditPlugin:
             self.metrics.results["skipped"] += 1
             return
         try:
-            self.queue.put_nowait((signal, time.monotonic()))
+            self.queue.put_nowait((signal, scope, time.monotonic()))
             self.metrics.queue_depth = self.queue.qsize()
         except asyncio.QueueFull:
             self.metrics.results["queue_full"] += 1
@@ -240,20 +276,21 @@ class SignalAuditPlugin:
     # -- worker --------------------------------------------------------------
     async def _run(self):
         while True:
-            signal, enqueued = await self.queue.get()
+            signal, scope, enqueued = await self.queue.get()
             self.metrics.queue_depth = self.queue.qsize()
             try:
                 if time.monotonic() - enqueued > self.queue_ttl:
                     self.metrics.results["expired"] += 1
                     continue
-                await self._assess(signal)
+                await self._assess(signal, scope)
             except Exception:
                 # Never surface exception text, provider payload or signal values.
+                self.dedup.forget(signal, tenant=self.tenant, context=scope)
                 self.metrics.results["error"] += 1
             finally:
                 self.queue.task_done()
 
-    async def _assess(self, signal):
+    async def _assess(self, signal, scope=None):
         now = time.monotonic()
         if self._kill_switch:
             self.metrics.results["kill_switch"] += 1
@@ -262,8 +299,14 @@ class SignalAuditPlugin:
             self.metrics.circuit["short_circuited"] += 1
             self.metrics.results["circuit_open"] += 1
             return
-        key = self._cache_key(signal)
-        cached = self._cache_get(key, now)
+        if self._should_suppress(signal, scope, now):
+            return
+        # A signal-only verdict cache can merge different principals. Preserve
+        # the legacy cache only when tenant-scoped dedup is not configured;
+        # dedup itself handles exact repeats safely in the opt-in mode.
+        use_verdict_cache = self.tenant is None
+        key = self._cache_key(signal) if use_verdict_cache else None
+        cached = self._cache_get(key, now) if use_verdict_cache else None
         if cached is not None:
             self.metrics.provider_avoided += 1
             self._handle_verdict(signal, cached)
@@ -281,7 +324,7 @@ class SignalAuditPlugin:
             verdict = validate_response(response, self.review_threshold)
             if verdict is None:
                 self.metrics.results["abstain"] += 1
-                self._record_provider_failure()
+                self._record_provider_failure(signal, scope)
                 return
             usage = response["usage"]
             self.metrics.input_tokens += usage["input_tokens"]
@@ -290,20 +333,42 @@ class SignalAuditPlugin:
             self.metrics.last_success_timestamp_seconds = time.time()
             self._consecutive_failures = 0
             self.metrics.circuit["closed"] += 1
-            self._cache_put(key, verdict, time.monotonic())
+            if use_verdict_cache:
+                self._cache_put(key, verdict, time.monotonic())
             self._handle_verdict(signal, verdict, candidates)
         except asyncio.TimeoutError:
             self.metrics.results["timeout"] += 1
-            self._record_provider_failure()
+            self._record_provider_failure(signal, scope)
         except Exception:
             self.metrics.results["error"] += 1
-            self._record_provider_failure()
+            self._record_provider_failure(signal, scope)
         finally:
             self.metrics.observe(time.monotonic() - began)
             self.metrics.inflight = max(self.metrics.inflight - 1, 0)
 
-    def _record_provider_failure(self):
-        """Count a failure and trip the breaker. Never retry."""
+    def _should_suppress(self, signal, scope, now):
+        """Ask the dedup layer; suppress the provider call only on exact repeats.
+
+        The dedup decision is local-only and shadow-safe: a ``suppress`` skips
+        the provider for this exact repeat, while every subtle difference — a new
+        scope, a changed reason/flow, a crossed threshold — yields ``evaluate``
+        and proceeds to the provider unchanged. When no tenant is configured the
+        layer abstains (evaluates, counting ``abstain_from_dedup``) rather than
+        merging across tenants.
+        """
+        # Always ask, even with no tenant, so the abstention is observed and
+        # counted rather than silently bypassing the metric surface.
+        decision = self.dedup.decide(signal, tenant=self.tenant, context=scope, now=now)
+        # Mirror the dedup layer's fixed-label counters into the shared metric
+        # surface so one scrape endpoint reports them. Labels are the closed
+        # DEDUP_COUNTERS enum, never a fingerprint or input value.
+        for label in DEDUP_COUNTERS:
+            self.metrics.dedup[label] = self.dedup.counters()[label]
+        return decision != DECISION_EVALUATE
+
+    def _record_provider_failure(self, signal, scope):
+        """Forget unassessed repeats, count failure and trip the breaker."""
+        self.dedup.forget(signal, tenant=self.tenant, context=scope)
         self._consecutive_failures += 1
         if self._consecutive_failures >= self.circuit_failure_threshold:
             self._circuit_open_until = max(self._circuit_open_until,

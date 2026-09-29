@@ -19,6 +19,7 @@ from auth_audit_jev import (
     MAX_SIGNAL_BYTES,
     SCHEMA_VERSION,
     AuditPlugin,
+    DedupLayer,
     Metrics,
     SignalAuditPlugin,
     agreement,
@@ -451,6 +452,100 @@ class SignalPluginTests(unittest.IsolatedAsyncioTestCase):
         await plugin.join()
         await plugin.close()
         self.assertEqual(len(calls), 3)
+
+    async def test_dedup_suppresses_repeat_with_same_scope_but_new_scope_evaluates(self):
+        """The dedup layer runs before the provider, keyed on structured reason/flow,
+        escalation-bearing buckets, and the producer-owned scope fingerprint. Two
+        *identical* signals with the same `dedup_scope` and unchanged buckets cost
+        one provider call; a changed principal (new scope) is evaluated; a changed
+        count_bucket / repeat_pattern (an escalation) is evaluated, never
+        suppressed.
+        """
+        transport = fx.offline_transport(lambda request: fx.provider_response("user_error"))
+        # cache_ttl=0 disables the verdict cache so the dedup layer alone governs
+        # whether a provider call happens; otherwise the signal-keyed verdict cache
+        # would absorb a same-signal/different-scope event before we can observe it.
+        plugin = self.plugin(transport=transport, tenant="acme", cache_ttl=0,
+                             dedup=DedupLayer(ttl_seconds=60.0))
+        await plugin.start()
+        scope = {"principal": "alice", "client": "web"}
+
+        # Two exact repeats: same reason, same scope, same bucket field -> one
+        # provider call, second suppressed.
+        signal_kwargs = dict(failure_reason="invalid_credentials", count_bucket="1",
+                             repeat_pattern="not_repeated", window_bucket="under-1m")
+        await plugin.emit(envelope(fx.signal(**signal_kwargs), dedup_scope=scope))
+        await plugin.join()
+        await plugin.emit(envelope(fx.signal(**signal_kwargs), dedup_scope=scope))
+        await plugin.join()
+        self.assertEqual(len(transport.calls), 1)
+        self.assertEqual(plugin.metrics.dedup["suppressed"], 1)
+
+        # A different principal under the same tenant and reason must NOT be
+        # absorbed: it is a distinct producer scope and re-assessed.
+        await plugin.emit(envelope(fx.signal(**signal_kwargs),
+                                   dedup_scope={"principal": "bob", "client": "web"}))
+        await plugin.join()
+        self.assertEqual(len(transport.calls), 2)
+
+        # An escalation — crossed count threshold + burst pattern — must NOT be
+        # suppressed as an exact repeat even under the same scope/reason.
+        await plugin.emit(envelope(
+            fx.signal(failure_reason="invalid_credentials", count_bucket="over-100",
+                      repeat_pattern="repeated_same_principal_burst",
+                      window_bucket="under-1m"),
+            dedup_scope=scope))
+        await plugin.join()
+        await plugin.close()
+        self.assertEqual(len(transport.calls), 3)
+        self.assertEqual(plugin.metrics.dedup["suppressed"], 1)
+
+    async def test_dedup_new_principal_bypasses_signal_only_verdict_cache(self):
+        transport = fx.offline_transport(lambda request: fx.provider_response("user_error"))
+        # The legacy verdict cache keys on signal alone; in tenant-scoped dedup
+        # mode it must not reuse Alice's result for Bob's matching signal.
+        plugin = self.plugin(transport=transport, tenant="acme",
+                             dedup=DedupLayer(ttl_seconds=60.0))
+        await plugin.start()
+        signal = fx.signal(failure_reason="invalid_credentials")
+        for principal in ("alice", "bob"):
+            await plugin.emit(envelope(signal, dedup_scope={"principal": principal}))
+            await plugin.join()
+        await plugin.close()
+        self.assertEqual(len(transport.calls), 2)
+
+    async def test_dedup_never_suppresses_after_provider_failure(self):
+        def unavailable(_request):
+            raise RuntimeError("offline provider")
+        transport = fx.offline_transport(unavailable)
+        plugin = self.plugin(transport=transport, tenant="acme", cache_ttl=0,
+                             dedup=DedupLayer(ttl_seconds=60.0))
+        await plugin.start()
+        item = envelope(fx.signal(failure_reason="invalid_credentials"),
+                        dedup_scope={"principal": "alice"})
+        await plugin.emit(item)
+        await plugin.join()
+        await plugin.emit(item)
+        await plugin.join()
+        await plugin.close()
+        self.assertEqual(len(transport.calls), 2)
+        self.assertEqual(plugin.metrics.dedup["suppressed"], 0)
+
+    async def test_dedup_abstains_without_tenant(self):
+        transport = fx.offline_transport()
+        plugin = self.plugin(transport=transport,
+                             dedup=DedupLayer(ttl_seconds=60.0))  # tenant stays None
+        await plugin.start()
+        scope = {"principal": "alice"}
+        for bucket in ("1", "2-5"):
+            await plugin.emit(envelope(fx.signal(failure_reason="invalid_credentials",
+                                                 count_bucket=bucket), dedup_scope=scope))
+            await plugin.join()
+        await plugin.close()
+        # No tenant means the dedup layer must abstain (evaluate), so each
+        # distinct signal reaches the provider rather than being merged.
+        self.assertEqual(len(transport.calls), 2)
+        self.assertEqual(plugin.metrics.dedup["abstain_from_dedup"], 2)
 
     async def test_cache_avoids_repeat_calls_and_expires(self):
         transport = fx.offline_transport(lambda request: fx.provider_response("user_error"))

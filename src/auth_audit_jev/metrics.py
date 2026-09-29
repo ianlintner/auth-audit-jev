@@ -22,6 +22,10 @@ CATEGORY_LABELS = ("user_error", "client_misconfiguration", "suspected_abuse", "
 CONFIDENCE_LABELS = ("low", "medium", "high")
 URGENCY_LABELS = ("routine_review", "elevated_review", "immediate_review", "unknown")
 CIRCUIT_LABELS = ("opened", "closed", "half_open", "short_circuited")
+# Dedup decision counters. Every label is a literal from a closed enum in
+# `dedup.py`; never a fingerprint, identifier or input value.
+DEDUP_LABELS = ("observed", "suppressed", "refreshed", "evicted", "expired",
+                "potential_missed_signal", "abstain_from_dedup")
 
 
 class Metrics:
@@ -34,6 +38,7 @@ class Metrics:
         self.urgency_levels = Counter()
         self.circuit = Counter()
         self.local_candidate_kinds = Counter()
+        self.dedup = Counter()
         self.queue_depth = 0
         self.inflight = 0
         self.provider_calls = 0
@@ -69,6 +74,9 @@ class Metrics:
         lines.append("# TYPE auth_audit_local_candidate_total counter")
         for label, value in sorted(self.local_candidate_kinds.items()):
             lines.append(f'auth_audit_local_candidate_total{{value="{label}"}} {value}')
+        lines.append("# TYPE auth_audit_dedup_total counter")
+        for label in DEDUP_LABELS:
+            lines.append(f'auth_audit_dedup_total{{outcome="{label}"}} {self.dedup[label]}')
         for name, value in (("queue_depth", self.queue_depth), ("inflight", self.inflight),
                             ("input_tokens_total", self.input_tokens),
                             ("output_tokens_total", self.output_tokens),
@@ -91,6 +99,7 @@ class Metrics:
                 "confidence_levels": dict(self.confidence_levels),
                 "urgency_levels": dict(self.urgency_levels), "circuit": dict(self.circuit),
                 "local_candidate_kinds": dict(self.local_candidate_kinds),
+                "dedup": dict(self.dedup),
                 "queue_depth": self.queue_depth, "inflight": self.inflight,
                 "provider_calls": self.provider_calls, "provider_avoided": self.provider_avoided,
                 "provider_latency_sum_seconds": self.provider_latency_sum_seconds,
