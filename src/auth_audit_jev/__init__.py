@@ -43,6 +43,8 @@ from .signal import (
     signal_from_legacy_event,
 )
 from .signal_plugin import ABSTENTION_REASONS, SignalAuditPlugin
+from .dedup import (DECISION_EVALUATE, DECISION_SUPPRESS, DECISIONS, DEDUP_COUNTERS,
+                    DedupLayer)
 
 MODEL = "jev-latest"
 URL = "https://api.typesafe.ai/v1/systemone"

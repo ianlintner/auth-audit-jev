@@ -106,6 +106,58 @@ is a producer contract rather than a parsing change:
 | `known_registered_client`, `redirect_uri_matches_registration` | Requires a lookup against registration state at emit time. |
 | `multiple_distinct_principals`, `token_replay_indicator`, `authorization_probe_indicator` | Requires cross-event correlation, which the current per-event fan-out does not have. |
 
+## Local-only repeat suppression (`dedup_scope`)
+
+Spending a Jev decision on every *exact repeat* of an unchanged failure is waste.
+`dedup.py` adds a bounded, in-process, per-tenant suppression layer that runs
+**before** the provider call. It is opt-in and disabled by default, so existing
+behaviour is unchanged until an operator turns it on.
+
+Equivalence is **not** the three cloud-bound fields alone. Two events are "the
+same" only when both of these match:
+
+1. the reviewed structured reason/flow — the closed enums `protocol`, `flow`,
+   `failure_reason`, `client_config_category`, `authz_denial_category`, `outcome`,
+   **and** escalation buckets `repeat_pattern`, `count_bucket`, `window_bucket`;
+2. a tenant-scoped, in-process keyed HMAC fingerprint of a producer-owned scope
+   (`principal` / `client` / `session`). The default HMAC key is random per
+   process; only its digest is held in the bounded volatile registry.
+
+`dedup_scope` is a **separate, opt-in top-level envelope field**, never inside
+`authn_signal`, and its values never leave the process: they are not logged, not
+exported, and not sent to the provider. A producer sets it only when it wants
+repeat suppression:
+
+```python
+envelope = {
+    "event": {...},
+    "authn_signal": {...},
+    "dedup_scope": {"principal": "…", "client": "…"},   # optional; never exported
+}
+```
+
+The plugin is configured with a `tenant` scope key. With no tenant, the layer
+abstains (evaluates every event) — it never merges across tenants. Any
+suppression needs an explicit, bounded, nonempty producer `principal` for **all**
+failure reasons. Structured categories alone can identify neither a client nor
+a principal; a client or session alone can span different users' attempts.
+The HMAC incorporates tenant and scope, so neither raw tenant nor principal is
+stored in a registry key. In tenant-scoped mode the legacy signal-only verdict
+cache is bypassed, so a new scope cannot inherit another principal's cached
+recommendation.
+
+The layer is strictly a *savings* lever, never a detection gate: the first
+observation is always evaluated, an exact repeat **after a successful
+assessment** within the TTL updates local counters and skips the provider;
+failed/abstained provider attempts are forgotten, so the next event gets a
+fresh chance. Any change — a new scope, a changed reason/flow, a crossed
+threshold or a milestone refresh — yields a fresh assessment. Bounds: a fixed LRU capacity, a per-entry TTL keyed on last activity,
+a milestone re-evaluation after repeated suppression, and a kill switch that
+forces every event back to the provider. Counters (`observed`, `suppressed`,
+`refreshed`, `evicted`, `expired`, `potential_missed_signal`,
+`abstain_from_dedup`) are low-cardinality literals — never a fingerprint or an
+input value.
+
 ## Reading the two boundaries side by side
 
 `SignalAuditPlugin` falls back to the legacy projection **only when the producer
