@@ -1,0 +1,68 @@
+==============================================================================
+Offline synthetic evaluation report  [synthetic-eval/v1]
+SIMULATION — no live Jev call; only the in-process fake provider ran.
+==============================================================================
+scenarios                     : 21
+provider calls (dedup off)    : 21  (baseline)
+provider calls (dedup on)     : 21
+provider calls saved          : 0
+suppression rate              : 0.0000
+
+provider abstentions             : 2
+dedup abstentions (all reasons)  : 0
+no-alert outcomes (incl suppressed): 2
+queue drops (corpus run)      : 0  (corpus never overflows; see probe below)
+false positives (abuse alert) : 3
+  fp events                   : ['fp_trap_provider_says_abuse_on_stale_secret', 'repeat_exact_repeat_1 (should have abstained)', 'repeat_exact_repeat_2 (should have abstained)']
+false negatives (missed abuse): 1
+  fn events                   : ['fn_trap_provider_says_user_error_on_spray']
+escalations evaluated         : 2 / 2 required
+label agreement (offline)     : 0.7895
+
+per-category (offline, synthetic labels):
+  user_error               support=8   predicted=11  precision=0.7273 recall=1.0000
+  client_misconfiguration  support=5   predicted=3   precision=1.0000 recall=0.6000
+  suspected_abuse          support=5   predicted=5   precision=0.8000 recall=0.8000
+  ambiguous                support=0   predicted=0   precision=None (no support) recall=None (no support)
+  other                    support=0   predicted=0   precision=None (no support) recall=None (no support)
+
+observed offline worker latency (NOT request p99):
+  samples=21 mean=0.0000s max=0.0001s
+
+queue pressure probe (offline, stalled fake provider):
+  queue_size=2 emits=10 drops=7 emit_never_blocked=True
+
+dedup state bound probe (offline):
+  capacity=8 distinct_keys=100 final_size=8 evicted=92 bounded=True
+
+dedup counters:
+  abstain_from_dedup      : 0
+  evicted                 : 0
+  expired                 : 0
+  observed                : 21
+  potential_missed_signal : 0
+  refreshed               : 0
+  suppressed              : 0
+
+NOT MEASURED (unavailable offline — reported as such):
+  - event_to_alert_latency: no event source, bus, or wall clock is attached in offline mode
+  - inline_request_path_effect: shadow-only; nothing here touches an authorization decision
+  - live_jev_confidence: no live provider call is made; the fake provider returns fixed labels
+  - live_provider_accuracy: synthetic fixture labels are not ground truth about real traffic
+  - production_p99_latency: worker-side offline durations are a plumbing proxy, not request p99
+  - provider_cost_usd: offline fake usage is zero; no paid request occurs
+  - real_traffic_precision_recall: corpus is invented and small; not a population estimate
+
+OFFLINE HARNESS GATES (not pilot readiness):
+  [PASS] escalations_never_hidden
+  [FAIL] dedup_saves_calls
+  [PASS] abstains_present
+  [FAIL] false_positive_trap_detected
+  [PASS] false_negative_trap_detected
+  [PASS] unavailable_metrics_marked
+  [PASS] queue_drops_are_counted_not_blocking
+  [PASS] dedup_state_is_bounded
+  [PASS] no_cross_principal_collapse
+==============================================================================
+GATE RESULT: FAIL (offline harness only)
+PILOT READINESS: NOT ESTABLISHED — no live/consented calibration or owner approval
