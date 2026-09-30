@@ -37,6 +37,7 @@ nav:
   - Alerts and limits: alerts.md
   - Privacy and threat model: privacy.md
   - Integration roadmap: integrations.md
+  - EventBus adapter (Python): eventbus-adapter.md
   - Measuring latency: measurement.md
 
 markdown_extensions:
