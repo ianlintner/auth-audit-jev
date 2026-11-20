@@ -1,0 +1,64 @@
+# Idle-safe advisory alerts for the synthetic shadow pilot. Thresholds come from the
+# 2026-11-20 live run (evaluation/pilot-run.json): Jev call p95 ~0.17s, p99 ~0.36s
+# (first cold call 1.15s), provider timeout 3s. No Alertmanager is configured here.
+groups:
+  - name: auth-audit-jev-pilot
+    rules:
+      - alert: AuditPilotDown
+        expr: up{job="auth_audit_jev_pilot"} == 0 or absent(up{job="auth_audit_jev_pilot"})
+        for: 2m
+        labels: {severity: warning}
+        annotations:
+          summary: auth-audit-jev pilot metrics endpoint unavailable
+          description: Shadow pilot only; no access decision depends on it. systemctl --user status auth-audit-jev-pilot.
+
+      - alert: AuditPilotProviderFailures
+        expr: |
+          (
+            sum(increase(auth_audit_events_total{job="auth_audit_jev_pilot",outcome=~"error|timeout"}[15m]))
+            / clamp_min(sum(increase(auth_audit_provider_duration_seconds_count{job="auth_audit_jev_pilot"}[15m])), 1) > 0.10
+          )
+          and sum(increase(auth_audit_events_total{job="auth_audit_jev_pilot",outcome=~"error|timeout"}[15m])) >= 5
+          and sum(increase(auth_audit_provider_duration_seconds_count{job="auth_audit_jev_pilot"}[15m])) >= 20
+          and on() (auth_audit_pilot_enabled{job="auth_audit_jev_pilot"} == 1)
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: Jev provider error/timeout rate above 10%
+          description: Counts only; error text is never recorded. Kill switch is documented in docs/pilot.md.
+
+      - alert: AuditPilotJevLatencyHigh
+        expr: |
+          histogram_quantile(0.95, sum by (le) (increase(auth_audit_pilot_jev_call_seconds_bucket{job="auth_audit_jev_pilot"}[15m]))) > 1
+          and sum(increase(auth_audit_pilot_jev_call_seconds_count{job="auth_audit_jev_pilot"}[15m])) >= 20
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: Jev call p95 over 1s (observed baseline ~0.17s)
+
+      - alert: AuditPilotQueuePressure
+        expr: |
+          (
+            sum(increase(auth_audit_events_total{job="auth_audit_jev_pilot",outcome=~"queue_full|expired"}[10m]))
+            / clamp_min(sum(increase(auth_audit_events_total{job="auth_audit_jev_pilot",outcome=~"queue_full|expired|abstain|routine|recommendation|timeout|error"}[10m])), 1) > 0.2
+          )
+          and sum(increase(auth_audit_events_total{job="auth_audit_jev_pilot",outcome=~"queue_full|expired"}[10m])) >= 10
+        for: 5m
+        labels: {severity: info}
+        annotations:
+          summary: more than 20% of shadow events dropped by the bounded queue
+          description: Dropping is the designed overload behavior; observations are lost, access decisions are unaffected. Do not read drops as benign traffic.
+
+      - alert: AuditPilotCanaryLeak
+        expr: increase(auth_audit_pilot_canary_leaks_total{job="auth_audit_jev_pilot"}[5m]) > 0
+        labels: {severity: critical}
+        annotations:
+          summary: synthetic canary found in an outbound Jev request
+          description: Privacy boundary failure. Engage the kill switch now (touch ~/.config/auth-audit-jev/KILL).
+
+      - alert: AuditPilotCallBudgetNearlyUsed
+        expr: auth_audit_pilot_live_calls_total{job="auth_audit_jev_pilot"} / auth_audit_pilot_call_budget{job="auth_audit_jev_pilot"} > 0.8
+        for: 1m
+        labels: {severity: info}
+        annotations:
+          summary: more than 80% of the per-process live Jev call budget used

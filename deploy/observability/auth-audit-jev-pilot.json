@@ -1,0 +1,379 @@
+{
+  "title": "Auth Audit Jev Pilot (shadow, synthetic)",
+  "uid": "auth-audit-jev-pilot",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "tags": [
+    "auth-audit-jev",
+    "shadow"
+  ],
+  "panels": [
+    {
+      "id": 1,
+      "title": "Pilot state (1=yes; no data = unknown)",
+      "type": "stat",
+      "description": "Shadow/advisory only. No enforcement exists in this deployment.",
+      "datasource": "Prometheus",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 5
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "up{job=\"auth_audit_jev_pilot\"}",
+          "legendFormat": "scrape up",
+          "instant": true,
+          "range": false
+        },
+        {
+          "refId": "B",
+          "expr": "auth_audit_pilot_enabled{job=\"auth_audit_jev_pilot\"}",
+          "legendFormat": "audit enabled",
+          "instant": true,
+          "range": false
+        },
+        {
+          "refId": "C",
+          "expr": "auth_audit_pilot_killed{job=\"auth_audit_jev_pilot\"}",
+          "legendFormat": "kill switch engaged",
+          "instant": true,
+          "range": false
+        },
+        {
+          "refId": "D",
+          "expr": "auth_audit_pilot_fake_transport{job=\"auth_audit_jev_pilot\"}",
+          "legendFormat": "fake transport (must be 0)",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "id": 2,
+      "title": "Safety counters",
+      "type": "stat",
+      "description": "Budget is a hard per-process cap on live Jev calls.",
+      "datasource": "Prometheus",
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 5
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "auth_audit_pilot_canary_leaks_total{job=\"auth_audit_jev_pilot\"}",
+          "legendFormat": "canary leaks (must be 0)",
+          "instant": true,
+          "range": false
+        },
+        {
+          "refId": "B",
+          "expr": "auth_audit_pilot_auth_failures_total{job=\"auth_audit_jev_pilot\"}",
+          "legendFormat": "rejected scrapes/admin calls",
+          "instant": true,
+          "range": false
+        },
+        {
+          "refId": "C",
+          "expr": "auth_audit_pilot_live_calls_total{job=\"auth_audit_jev_pilot\"} / auth_audit_pilot_call_budget{job=\"auth_audit_jev_pilot\"}",
+          "legendFormat": "live call budget used",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "id": 3,
+      "title": "Jev call duration p50/p95/p99",
+      "type": "timeseries",
+      "description": "Provider call time measured in the pilot transport. Histogram-bucket estimates, 5m window; empty when there are no calls.",
+      "datasource": "Prometheus",
+      "gridPos": {
+        "x": 0,
+        "y": 5,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(auth_audit_pilot_jev_call_seconds_bucket{job=\"auth_audit_jev_pilot\"}[5m])))",
+          "legendFormat": "p50",
+          "instant": false,
+          "range": true
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(auth_audit_pilot_jev_call_seconds_bucket{job=\"auth_audit_jev_pilot\"}[5m])))",
+          "legendFormat": "p95",
+          "instant": false,
+          "range": true
+        },
+        {
+          "refId": "C",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(auth_audit_pilot_jev_call_seconds_bucket{job=\"auth_audit_jev_pilot\"}[5m])))",
+          "legendFormat": "p99",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 4,
+      "title": "Event to alert / result (sync probes only)",
+      "type": "timeseries",
+      "description": "Only recorded for ?sync=1 probes (queue otherwise empty). Under live Jev, alerts need a high-confidence suspicious verdict, so this can legitimately be empty.",
+      "datasource": "Prometheus",
+      "gridPos": {
+        "x": 12,
+        "y": 5,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(auth_audit_pilot_event_to_alert_seconds_bucket{job=\"auth_audit_jev_pilot\"}[5m])))",
+          "legendFormat": "event->alert p95",
+          "instant": false,
+          "range": true
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(auth_audit_pilot_event_to_result_seconds_bucket{job=\"auth_audit_jev_pilot\"}[5m])))",
+          "legendFormat": "event->result p50",
+          "instant": false,
+          "range": true
+        },
+        {
+          "refId": "C",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(auth_audit_pilot_event_to_result_seconds_bucket{job=\"auth_audit_jev_pilot\"}[5m])))",
+          "legendFormat": "event->result p95",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 5,
+      "title": "Outcomes per 5m (counters)",
+      "type": "timeseries",
+      "description": "abstain/timeout/error/queue_full/expired are blind spots, not benign traffic. Not a measure of task or detection quality.",
+      "datasource": "Prometheus",
+      "gridPos": {
+        "x": 0,
+        "y": 13,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (outcome) (increase(auth_audit_events_total{job=\"auth_audit_jev_pilot\",outcome=~\"recommendation|alerted|alert_error|routine|abstain|timeout|error|queue_full|expired|skipped|disabled|shutdown_drop\"}[5m]))",
+          "legendFormat": "{{outcome}}",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 6,
+      "title": "Queue depth and in-flight",
+      "type": "timeseries",
+      "description": "Queue is bounded (16) with a 5s TTL; one worker.",
+      "datasource": "Prometheus",
+      "gridPos": {
+        "x": 12,
+        "y": 13,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "auth_audit_queue_depth{job=\"auth_audit_jev_pilot\"}",
+          "legendFormat": "queue depth",
+          "instant": false,
+          "range": true
+        },
+        {
+          "refId": "B",
+          "expr": "auth_audit_inflight{job=\"auth_audit_jev_pilot\"}",
+          "legendFormat": "in flight",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 7,
+      "title": "Provider tokens (reported) per 15m",
+      "type": "timeseries",
+      "description": "api.typesafe.ai reports tokens but no cost_usd; absence of cost is not evidence of zero cost.",
+      "datasource": "Prometheus",
+      "gridPos": {
+        "x": 0,
+        "y": 21,
+        "w": 8,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "increase(auth_audit_input_tokens_total{job=\"auth_audit_jev_pilot\"}[15m])",
+          "legendFormat": "input",
+          "instant": false,
+          "range": true
+        },
+        {
+          "refId": "B",
+          "expr": "increase(auth_audit_output_tokens_total{job=\"auth_audit_jev_pilot\"}[15m])",
+          "legendFormat": "output",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 8,
+      "title": "Access decisions by scenario (unchanged by audit)",
+      "type": "timeseries",
+      "description": "The synthetic decision stub is computed before events publish; killing/failing audit must not change this.",
+      "datasource": "Prometheus",
+      "gridPos": {
+        "x": 8,
+        "y": 21,
+        "w": 8,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (scenario, decision) (increase(auth_audit_pilot_decisions_total{job=\"auth_audit_jev_pilot\"}[15m]))",
+          "legendFormat": "{{scenario}} {{decision}}",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {}
+    },
+    {
+      "id": 9,
+      "title": "Seconds since last validated verdict",
+      "type": "stat",
+      "description": "Informational only; idle is not a fault.",
+      "datasource": "Prometheus",
+      "gridPos": {
+        "x": 16,
+        "y": 21,
+        "w": 8,
+        "h": 7
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "time() - auth_audit_last_success_timestamp_seconds{job=\"auth_audit_jev_pilot\"} > 0",
+          "legendFormat": "age",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    }
+  ]
+}

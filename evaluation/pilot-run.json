@@ -1,0 +1,87 @@
+{
+  "burst": {
+    "caller_response_seconds": {
+      "max": 0.05115074498462491,
+      "n": 60,
+      "p50": 0.001188620983157307,
+      "p95": 0.0031576659821439534,
+      "p99": 0.05115074498462491
+    },
+    "decisions_unchanged": true,
+    "events": 60,
+    "result_delta": {
+      "abstain": 17,
+      "queue_full": 43
+    }
+  },
+  "end_live_calls": 59,
+  "mode": "synthetic-only, advisory shadow, no enforcement",
+  "privacy": {
+    "canary_hits": {},
+    "canary_leaks_blocked_in_transport": 0,
+    "pass": true,
+    "surfaces_scanned": [
+      "alerts_file",
+      "journal",
+      "metrics",
+      "state"
+    ]
+  },
+  "rollback": {
+    "decision_while_killed": "deny",
+    "kill_response": {
+      "audit": "killed"
+    },
+    "kill_seconds": 0.0024535940028727055,
+    "plugins_on_bus": [],
+    "provider_calls_after_kill": 0,
+    "resume_response": {
+      "audit": "enabled"
+    }
+  },
+  "sequential": {
+    "decisions_match_expected": true,
+    "event_to_alert_seconds": {
+      "max": null,
+      "n": 0,
+      "p50": null,
+      "p95": null,
+      "p99": null
+    },
+    "event_to_result_seconds": {
+      "max": 0.24193236598512158,
+      "n": 42,
+      "p50": 0.11879655599477701,
+      "p95": 0.1543658190057613,
+      "p99": 0.24193236598512158
+    },
+    "jev_call_seconds": {
+      "max": 0.24146691200439818,
+      "n": 42,
+      "p50": 0.11843844500253908,
+      "p95": 0.15394107199972495,
+      "p99": 0.24146691200439818
+    },
+    "per_scenario": {
+      "authn_failure": {
+        "alerts": 0,
+        "n": 20
+      },
+      "authz_denial": {
+        "alerts": 0,
+        "n": 20
+      }
+    },
+    "results": {
+      "abstain": 40,
+      "routine": 2
+    }
+  },
+  "start_live_calls": 0,
+  "started": "2026-11-20T12:25:35-0600",
+  "verdict": {
+    "decisions_unchanged": true,
+    "kill_switch_ok": true,
+    "privacy_pass": true
+  }
+}

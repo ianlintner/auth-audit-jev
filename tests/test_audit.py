@@ -57,6 +57,9 @@ class ProjectionTests(unittest.TestCase):
         self.assertIsNone(validate_answer({**answer(), "model": "jev-evil"}))
         self.assertEqual(validate_answer({**answer(), "model": "jev-1.13"}), "suspicious")
         self.assertIsNone(validate_answer({**answer(), "usage": {"input_tokens": 1}}))
+        # Observed live shape: tokens without cost_usd is accepted; a bad cost is not.
+        self.assertEqual(validate_answer({**answer(), "usage": {"input_tokens": 405, "output_tokens": 40}}), "suspicious")
+        self.assertIsNone(validate_answer({**answer(), "usage": {"input_tokens": 1, "output_tokens": 1, "cost_usd": -1}}))
         self.assertIsNone(validate_answer({**answer(), "answers": {"assessment": {**answer()["answers"]["assessment"], "confidence": True}}}))
 
 

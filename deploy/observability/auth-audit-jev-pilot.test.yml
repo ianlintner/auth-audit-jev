@@ -1,0 +1,64 @@
+# Synthetic promtool unit tests (not production observations). Run: see docs/pilot.md
+rule_files:
+  - auth-audit-jev-pilot.rules.yml
+evaluation_interval: 1m
+tests:
+  - name: idle healthy pilot does not alert
+    interval: 1m
+    input_series:
+      - series: 'up{job="auth_audit_jev_pilot"}'
+        values: '1x30'
+      - series: 'auth_audit_pilot_enabled{job="auth_audit_jev_pilot"}'
+        values: '1x30'
+      - series: 'auth_audit_pilot_live_calls_total{job="auth_audit_jev_pilot"}'
+        values: '0x30'
+      - series: 'auth_audit_pilot_call_budget{job="auth_audit_jev_pilot"}'
+        values: '200x30'
+    alert_rule_test:
+      - {eval_time: 25m, alertname: AuditPilotDown, exp_alerts: []}
+      - {eval_time: 25m, alertname: AuditPilotProviderFailures, exp_alerts: []}
+      - {eval_time: 25m, alertname: AuditPilotQueuePressure, exp_alerts: []}
+      - {eval_time: 25m, alertname: AuditPilotCallBudgetNearlyUsed, exp_alerts: []}
+
+  - name: absent endpoint fires down
+    interval: 1m
+    input_series:
+      - series: 'up{job="other"}'
+        values: '1x10'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: AuditPilotDown
+        exp_alerts:
+          - exp_labels: {severity: warning, job: auth_audit_jev_pilot}
+            exp_annotations:
+              summary: auth-audit-jev pilot metrics endpoint unavailable
+              description: Shadow pilot only; no access decision depends on it. systemctl --user status auth-audit-jev-pilot.
+
+  - name: canary leak fires immediately
+    interval: 1m
+    input_series:
+      - series: 'auth_audit_pilot_canary_leaks_total{job="auth_audit_jev_pilot"}'
+        values: '0 0 0 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: AuditPilotCanaryLeak
+        exp_alerts:
+          - exp_labels: {severity: critical, job: auth_audit_jev_pilot}
+            exp_annotations:
+              summary: synthetic canary found in an outbound Jev request
+              description: Privacy boundary failure. Engage the kill switch now (touch ~/.config/auth-audit-jev/KILL).
+
+  - name: budget alert
+    interval: 1m
+    input_series:
+      - series: 'auth_audit_pilot_live_calls_total{job="auth_audit_jev_pilot"}'
+        values: '170x5'
+      - series: 'auth_audit_pilot_call_budget{job="auth_audit_jev_pilot"}'
+        values: '200x5'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: AuditPilotCallBudgetNearlyUsed
+        exp_alerts:
+          - exp_labels: {severity: info, job: auth_audit_jev_pilot}
+            exp_annotations:
+              summary: more than 80% of the per-process live Jev call budget used
