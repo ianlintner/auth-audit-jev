@@ -205,6 +205,40 @@ class PilotTests(unittest.IsolatedAsyncioTestCase):
         server.close()
         await p.stop()
 
+    async def test_repeated_resume_keeps_enabled_gauge_and_plugin(self):
+        async def t(request):
+            return answer()
+
+        p = make(t)
+        server = await asyncio.start_server(lambda r, w: P.handle_http(p, r, w), "127.0.0.1", 0)
+        port = server.sockets[0].getsockname()[1]
+        await p.start()
+        plugin = p.plugin
+
+        async def post(path):
+            r, w = await asyncio.open_connection("127.0.0.1", port)
+            w.write(f"POST {path} HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {'a' * 16}\r\n\r\n".encode())
+            await w.drain()
+            raw = await r.read()
+            w.close()
+            return json.loads(raw.partition(b"\r\n\r\n")[2])
+
+        for _ in range(3):
+            self.assertEqual(await post("/pilot/resume"), {"audit": "enabled"})
+            self.assertEqual(p.state, "enabled")
+            self.assertIs(p.plugin, plugin)
+            self.assertEqual(len(p.bus.plugins), 1)
+            self.assertIn("auth_audit_pilot_enabled 1", p.metrics_text())
+        await p.synthetic("authn_failure", sync=True)
+        self.assertEqual(p.live_calls, 1)
+        # kill then resume still works and the gauge follows the real state
+        await post("/pilot/kill")
+        self.assertIn("auth_audit_pilot_enabled 0", p.metrics_text())
+        self.assertEqual(await post("/pilot/resume"), {"audit": "enabled"})
+        self.assertIn("auth_audit_pilot_enabled 1", p.metrics_text())
+        server.close()
+        await p.stop()
+
 
 if __name__ == "__main__":
     unittest.main()

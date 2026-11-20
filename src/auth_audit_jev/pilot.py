@@ -290,7 +290,6 @@ async def handle_http(pilot, reader, writer):
                 await pilot.disable("killed")
                 code, body, ctype = j({"audit": pilot.state})
             elif method == "POST" and url.path == "/pilot/resume":
-                pilot.state = "stopped"
                 code, body, ctype = j({"audit": await pilot.enable()})
         writer.write((f"HTTP/1.1 {code} X\r\nContent-Type: {ctype}\r\nContent-Length: {len(body)}\r\n"
                       "Connection: close\r\n\r\n").encode("ascii") + body)
