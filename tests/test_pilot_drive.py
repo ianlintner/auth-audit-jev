@@ -115,7 +115,9 @@ class RunVerdictTests(unittest.TestCase):
 
     def test_healthy_run_passes_and_restores_enabled(self):
         pilot = FakePilot()
-        out, code = self.run_it(pilot)
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "alerts.jsonl").write_text("")
+            out, code = D.run(args(state_dir=d), pilot, journal=ok_journal, sleep=lambda s: None)
         self.assertEqual(code, 0, out["verdict"])
         self.assertTrue(all(out["verdict"].values()))
         self.assertEqual(pilot.state, "enabled")
@@ -139,8 +141,49 @@ class RunVerdictTests(unittest.TestCase):
         self.assertFalse(out["verdict"]["kill_switch_ok"])
         self.assertEqual(out["rollback"]["provider_calls_during_run"], 0)
 
+    def test_operator_kill_mid_run_stays_killed(self):
+        class KilledMidRun(FakePilot):
+            def __call__(self, method, path):
+                if path == "/pilot/state" and self.log and any("scenario=" in p for _, p in self.log) \
+                        and self.live_calls >= 4 and self.attached:
+                    self.state, self.attached = "killed", False   # operator kills during the burst drain
+                return super().__call__(method, path)
+
+        pilot = KilledMidRun()
+        out, code = self.run_it(pilot)
+        self.assertEqual(code, 1)
+        self.assertEqual(pilot.state, "killed")
+        self.assertNotIn(("POST", "/pilot/resume"), pilot.log)
+        self.assertNotIn(("POST", "/pilot/kill"), pilot.log)
+        self.assertTrue(out["rollback"]["skipped"])
+        self.assertFalse(out["verdict"]["kill_switch_ok"])
+
+    def test_missing_alerts_file_is_unavailable_when_alerts_expected(self):
+        out, code = self.run_it(FakePilot())   # default state_dir does not exist; pilot alerted
+        self.assertEqual(code, 1)
+        self.assertFalse(out["privacy"]["pass"])
+        self.assertEqual([u["surface"] for u in out["privacy"]["surfaces_unavailable"]], ["alerts_file"])
+        self.assertNotIn("alerts_file", out["privacy"]["surfaces_scanned"])
+
+    def test_missing_alerts_file_ok_when_no_alerts_expected(self):
+        class NoAlerts(FakePilot):
+            def __call__(self, method, path):
+                body, t = super().__call__(method, path)
+                if isinstance(body, dict) and "alerted" in body:
+                    body["alerted"] = False
+                if path == "/pilot/state":
+                    body["results"] = {}
+                return body, t
+
+        out, code = self.run_it(NoAlerts())
+        self.assertEqual(out["privacy"]["surfaces_unavailable"], [])
+        self.assertTrue(out["privacy"]["pass"])
+
     def test_journal_read_failure_is_unavailable_not_clean(self):
-        out, code = self.run_it(FakePilot(), journal=lambda unit: ("", "journalctl exited 1"))
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "alerts.jsonl").write_text("")
+            out, code = D.run(args(state_dir=d), FakePilot(), sleep=lambda s: None,
+                              journal=lambda unit: ("", "journalctl exited 1"))
         self.assertEqual(code, 1)
         self.assertFalse(out["privacy"]["pass"])
         self.assertEqual(out["privacy"]["surfaces_unavailable"], [{"surface": "journal", "reason": "journalctl exited 1"}])

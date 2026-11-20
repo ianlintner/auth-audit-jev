@@ -129,7 +129,11 @@ def run(args, api, journal=read_journal, sleep=time.sleep):
     surfaces = {"metrics": api("GET", "/metrics")[0], "state": json.dumps(after)}
     unavailable = []
     alerts_file = Path(args.state_dir) / "alerts.jsonl"
-    surfaces["alerts_file"] = alerts_file.read_text() if alerts_file.exists() else ""
+    alerts_expected = after["results"].get("alerted", 0) > 0 or any(v["alerts"] for v in per.values())
+    if alerts_file.exists():
+        surfaces["alerts_file"] = alerts_file.read_text()
+    elif alerts_expected:  # alerts fired, so a missing file is unavailable evidence, not a clean scan
+        unavailable.append({"surface": "alerts_file", "reason": f"expected alerts file missing: {alerts_file}"})
     journal_text, journal_error = journal(args.unit)
     if journal_error:
         unavailable.append({"surface": "journal", "reason": journal_error})
@@ -142,8 +146,19 @@ def run(args, api, journal=read_journal, sleep=time.sleep):
                       "pass": not any(hits.values()) and not unavailable and after["canary_leaks"] == 0}
 
     # 4. Rollback: kill switch detaches the plugin, further events make zero provider calls.
-    calls_before = after["live_calls"]
-    saw_provider_call = calls_before > start_state["live_calls"] and bool(after["plugins_on_bus"])
+    # Re-read state right before acting: if an operator killed the pilot mid-run, leave it killed
+    # (no kill, no resume) because this run no longer owns that transition.
+    pre_kill, _ = api("GET", "/pilot/state")
+    calls_before = pre_kill["live_calls"]
+    if pre_kill["state"] != "enabled" or not pre_kill["plugins_on_bus"]:
+        out["error"] = "pilot was no longer enabled and attached before the rollback phase (killed during the run?); left as found, not resumed"
+        out["rollback"] = {"skipped": True, "state_before_rollback": pre_kill["state"],
+                            "plugins_on_bus": pre_kill["plugins_on_bus"]}
+        out["end_live_calls"] = calls_before
+        out["verdict"] = {"decisions_unchanged": decisions_ok, "privacy_pass": out["privacy"]["pass"],
+                            "kill_switch_ok": False, "restored_initial_state": False}
+        return out, 1
+    saw_provider_call = calls_before > start_state["live_calls"]
     killed, took_kill = api("POST", "/pilot/kill")
     r, _ = api("POST", "/pilot/synthetic?scenario=authn_failure&sync=1")
     sleep(1)
