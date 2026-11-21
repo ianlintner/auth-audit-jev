@@ -1,0 +1,88 @@
+{
+  "burst": {
+    "caller_response_seconds": {
+      "max": 0.002099178993375972,
+      "n": 60,
+      "p50": 0.0007546260021626949,
+      "p95": 0.001385399984428659,
+      "p99": 0.002099178993375972
+    },
+    "decisions_unchanged": true,
+    "events": 60,
+    "result_delta": {
+      "alerted": 17,
+      "queue_full": 43,
+      "recommendation": 17
+    }
+  },
+  "end_live_calls": 59,
+  "mode": "synthetic-only, advisory shadow, no enforcement",
+  "privacy": {
+    "canary_hits": {},
+    "canary_leaks_blocked_in_transport": 0,
+    "pass": true,
+    "surfaces_scanned": [
+      "alerts_file",
+      "journal",
+      "metrics",
+      "state"
+    ]
+  },
+  "rollback": {
+    "decision_while_killed": "deny",
+    "kill_response": {
+      "audit": "killed"
+    },
+    "kill_seconds": 0.0032705379999242723,
+    "plugins_on_bus": [],
+    "provider_calls_after_kill": 0,
+    "resume_response": {
+      "audit": "enabled"
+    }
+  },
+  "sequential": {
+    "decisions_match_expected": true,
+    "event_to_alert_seconds": {
+      "max": 0.10111368898651563,
+      "n": 42,
+      "p50": 0.1005071819818113,
+      "p95": 0.1010331189900171,
+      "p99": 0.10111368898651563
+    },
+    "event_to_result_seconds": {
+      "max": 0.10145408898824826,
+      "n": 42,
+      "p50": 0.10066328500397503,
+      "p95": 0.10132279197569005,
+      "p99": 0.10145408898824826
+    },
+    "jev_call_seconds": {
+      "max": 0.10063681501196697,
+      "n": 42,
+      "p50": 0.10022065401426516,
+      "p95": 0.10052133799763396,
+      "p99": 0.10063681501196697
+    },
+    "per_scenario": {
+      "authn_failure": {
+        "alerts": 20,
+        "n": 20
+      },
+      "authz_denial": {
+        "alerts": 20,
+        "n": 20
+      }
+    },
+    "results": {
+      "alerted": 42,
+      "recommendation": 42
+    }
+  },
+  "start_live_calls": 0,
+  "started": "2026-11-20T12:20:48-0600",
+  "verdict": {
+    "decisions_unchanged": true,
+    "kill_switch_ok": true,
+    "privacy_pass": true
+  }
+}

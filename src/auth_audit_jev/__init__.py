@@ -95,9 +95,11 @@ def validate_answer(payload, min_confidence=.8):
         if not isinstance(model, str) or not re.fullmatch(r"jev-(?:latest|[0-9]+(?:\.[0-9]+)*(?:-[0-9]{8})?)", model):
             return None
         usage = payload.get("usage")
+        # Live api.typesafe.ai reports tokens but omits `cost_usd` (observed 2026-11-20).
+        # Tokens stay mandatory; cost is optional but, if present, must be a finite number.
         if not isinstance(usage, dict) or any(type(usage.get(k)) not in (int, float) or
             not math.isfinite(usage[k]) or usage[k] < 0 for k in
-            ("input_tokens", "output_tokens", "cost_usd")):
+            ("input_tokens", "output_tokens") + (("cost_usd",) if "cost_usd" in usage else ())):
             return None
         answers = payload["answers"]
         if not isinstance(answers, dict) or set(answers) != {"assessment"}:
@@ -251,7 +253,7 @@ class AuditPlugin:
                         usage = response["usage"]
                         self.metrics.input_tokens += usage["input_tokens"]
                         self.metrics.output_tokens += usage["output_tokens"]
-                        self.metrics.cost_usd += usage["cost_usd"]
+                        self.metrics.cost_usd += usage.get("cost_usd", 0)
                         self.metrics.last_success_timestamp_seconds = time.time()
                     if decision == "suspicious":
                         self.metrics.results["recommendation"] += 1

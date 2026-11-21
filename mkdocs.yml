@@ -39,6 +39,7 @@ nav:
   - Integration roadmap: integrations.md
   - EventBus adapter (Python): eventbus-adapter.md
   - Measuring latency: measurement.md
+  - Local shadow pilot: pilot.md
 
 markdown_extensions:
   - admonition

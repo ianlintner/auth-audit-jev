@@ -1,0 +1,24 @@
+# systemd --user unit for the loopback-only synthetic shadow pilot.
+# Install: scripts/pilot_install.sh   Remove/rollback: docs/pilot.md
+[Unit]
+Description=auth-audit-jev shadow pilot (synthetic events only, advisory)
+After=network-online.target
+
+[Service]
+Type=simple
+# %h = home. app/ is a release copy so removing a git worktree cannot break the unit.
+Environment=PYTHONPATH=%h/.local/share/auth-audit-jev/app:%h/Projects/python-oauth2-server/src
+Environment=PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+Environment=AUDIT_PILOT_PORT=4021 AUDIT_PILOT_MAX_LIVE_CALLS=200
+ExecStart=%h/Projects/python-oauth2-server/.venv/bin/python -m auth_audit_jev.pilot
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=%h/.local/state/auth-audit-jev
+ProtectHome=read-only
+MemoryMax=256M
+
+[Install]
+WantedBy=default.target
