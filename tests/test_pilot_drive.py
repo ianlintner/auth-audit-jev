@@ -220,14 +220,14 @@ class RunVerdictTests(unittest.TestCase):
         # (stale records would then look fresh); the run continues through rollback.
         with tempfile.TemporaryDirectory() as d:
             (Path(d) / "alerts.jsonl").write_text('{"old": 1}\n')
-            real = Path.read_text
+            real = Path.read_bytes
 
-            def read_text(self, *a, **kw):
+            def read_bytes(self, *a, **kw):
                 if self.name == "alerts.jsonl":
                     raise PermissionError(13, "Permission denied", str(self))
                 return real(self, *a, **kw)
 
-            with mock.patch.object(Path, "read_text", read_text):
+            with mock.patch.object(Path, "read_bytes", read_bytes):
                 out, code = D.run(args(state_dir=d), FakePilot(), journal=ok_journal, sleep=lambda s: None)
         self.assertFalse(out["privacy"]["pass"])
         self.assertEqual([u["surface"] for u in out["privacy"]["surfaces_unavailable"]], ["alerts_file"])
@@ -240,10 +240,10 @@ class RunVerdictTests(unittest.TestCase):
     def test_alerts_unreadable_at_scan_time_is_unavailable_and_does_not_abort_rollback(self):
         with tempfile.TemporaryDirectory() as d:
             (Path(d) / "alerts.jsonl").write_text("")
-            real = Path.read_text
+            real = Path.read_bytes
             state = {"failed": False}
 
-            def read_text(self, *a, **kw):
+            def read_bytes(self, *a, **kw):
                 # First read is the baseline (succeeds); the scan-time read fails.
                 if self.name == "alerts.jsonl" and not state["failed"]:
                     state["failed"] = True
@@ -252,7 +252,7 @@ class RunVerdictTests(unittest.TestCase):
                     raise PermissionError(13, "Permission denied", str(self))
                 return real(self, *a, **kw)
 
-            with mock.patch.object(Path, "read_text", read_text):
+            with mock.patch.object(Path, "read_bytes", read_bytes):
                 out, code = D.run(args(state_dir=d), FakePilot(), journal=ok_journal, sleep=lambda s: None)
         self.assertEqual(code, 1)
         self.assertFalse(out["privacy"]["pass"])
@@ -288,6 +288,22 @@ class RunVerdictTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("unreadable at run start", out["privacy"]["surfaces_unavailable"][0]["reason"])
         self.assertIn(("POST", "/pilot/kill"), pilot.log)
+
+    def test_read_alerts_decodes_utf8_explicitly_regardless_of_locale(self):
+        # Simulate a Latin-1 default encoding, where 0xff decodes "successfully" via read_text().
+        def latin1_read_text(self, *a, **k):
+            return self.read_bytes().decode("latin-1")
+
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "alerts.jsonl"
+            p.write_bytes(b'{"ok": 1}\n\xff\n')
+            with mock.patch.object(Path, "read_text", latin1_read_text):
+                text, err = D.read_alerts(p)
+            self.assertEqual(err, "UnicodeDecodeError")
+            self.assertIn('{"ok": 1}', text)   # same bytes scanned via replacement decode
+            p.write_bytes('{"ok": "é"}\n'.encode("utf-8"))
+            with mock.patch.object(Path, "read_text", latin1_read_text):
+                self.assertEqual(D.read_alerts(p), ('{"ok": "é"}\n', None))
 
     def test_canary_in_partial_alerts_file_is_reported_with_missing_records(self):
         class Partial(FakePilot):

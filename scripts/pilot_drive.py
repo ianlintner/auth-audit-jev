@@ -82,18 +82,19 @@ def read_alerts(path):
 
     text is whatever could be read: invalid UTF-8 is decoded with replacement (error
     "UnicodeDecodeError") so the readable content can still be scanned for canaries.
+    The bytes are read once and decoded explicitly as UTF-8, never with the process's
+    locale default, so the result does not depend on the environment.
     """
     try:
-        return path.read_text(), None
+        raw = path.read_bytes()
     except FileNotFoundError:
         return None, "missing"
-    except UnicodeDecodeError:
-        try:
-            return path.read_bytes().decode("utf-8", errors="replace"), "UnicodeDecodeError"
-        except OSError as exc:
-            return None, exc.__class__.__name__
     except OSError as exc:
         return None, exc.__class__.__name__
+    try:
+        return raw.decode("utf-8"), None
+    except UnicodeDecodeError:
+        return raw.decode("utf-8", errors="replace"), "UnicodeDecodeError"
 
 
 def _records(text):
