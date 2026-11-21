@@ -16,9 +16,10 @@ SPEC.loader.exec_module(D)
 class FakePilot:
     """Minimal stand-in for the pilot control API, driven through run()'s api callable."""
 
-    def __init__(self, state="enabled", attached=True, calls_per_event=1):
+    def __init__(self, state="enabled", attached=True, calls_per_event=1, alerts_file=None):
         self.state, self.attached, self.live_calls, self.per = state, attached, 0, calls_per_event
         self.log = []
+        self.alerts_file = alerts_file   # when set, each alert appends a record like the real pilot
 
     def snapshot(self):
         return {"state": self.state, "live_calls": self.live_calls, "canary_leaks": 0,
@@ -40,6 +41,9 @@ class FakePilot:
         scenario = path.split("scenario=")[1].split("&")[0]
         if self.attached:
             self.live_calls += self.per
+            if self.alerts_file:
+                with open(self.alerts_file, "a") as fh:
+                    fh.write('{"scenario": "%s"}\n' % scenario)
         return {"scenario": scenario, "decision": D.EXPECTED[scenario], "alerted": self.attached}, 0
 
 
@@ -113,14 +117,46 @@ class RunVerdictTests(unittest.TestCase):
     def run_it(self, pilot, journal=ok_journal):
         return D.run(args(), pilot, journal=journal, sleep=lambda s: None)
 
-    def test_healthy_run_passes_and_restores_enabled(self):
-        pilot = FakePilot()
+    def test_healthy_run_passes_and_never_resumes(self):
         with tempfile.TemporaryDirectory() as d:
-            (Path(d) / "alerts.jsonl").write_text("")
+            pilot = FakePilot(alerts_file=Path(d) / "alerts.jsonl")
             out, code = D.run(args(state_dir=d), pilot, journal=ok_journal, sleep=lambda s: None)
         self.assertEqual(code, 0, out["verdict"])
         self.assertTrue(all(out["verdict"].values()))
-        self.assertEqual(pilot.state, "enabled")
+        self.assertNotIn(("POST", "/pilot/resume"), pilot.log)
+        self.assertEqual(pilot.state, "killed")   # left for explicit operator resume
+        self.assertTrue(out["rollback"]["left_killed_for_operator_resume"])
+
+    def test_operator_kill_after_state_check_is_never_undone(self):
+        class KilledDuringWait(FakePilot):
+            def __call__(self, method, path):
+                if path == "/pilot/kill":
+                    super().__call__(method, path)
+                    return {"audit": "killed"}, 0
+                return super().__call__(method, path)
+
+        pilot = KilledDuringWait()
+        out, _ = self.run_it(pilot)
+        # Whatever happens after the driver's own kill (including an operator kill during the
+        # post-kill wait), the driver sends no resume, so the pilot cannot be re-enabled by it.
+        self.assertNotIn(("POST", "/pilot/resume"), pilot.log)
+        self.assertEqual(pilot.state, "killed")
+
+    def test_empty_alerts_file_is_unavailable_when_alerts_expected(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "alerts.jsonl").write_text("")
+            out, code = D.run(args(state_dir=d), FakePilot(), journal=ok_journal, sleep=lambda s: None)
+        self.assertEqual(code, 1)
+        self.assertFalse(out["privacy"]["pass"])
+        self.assertEqual([u["surface"] for u in out["privacy"]["surfaces_unavailable"]], ["alerts_file"])
+        self.assertNotIn("alerts_file", out["privacy"]["surfaces_scanned"])
+
+    def test_stale_alerts_from_prior_run_do_not_count(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "alerts.jsonl").write_text('{"old": 1}\n{"old": 2}\n')
+            out, code = D.run(args(state_dir=d), FakePilot(), journal=ok_journal, sleep=lambda s: None)
+        self.assertEqual(code, 1)
+        self.assertEqual([u["surface"] for u in out["privacy"]["surfaces_unavailable"]], ["alerts_file"])
 
     def test_disabled_start_refused_without_any_mutation(self):
         for pilot in (FakePilot(state="killed", attached=False), FakePilot(state="enabled", attached=False)):
@@ -181,8 +217,7 @@ class RunVerdictTests(unittest.TestCase):
 
     def test_journal_read_failure_is_unavailable_not_clean(self):
         with tempfile.TemporaryDirectory() as d:
-            (Path(d) / "alerts.jsonl").write_text("")
-            out, code = D.run(args(state_dir=d), FakePilot(), sleep=lambda s: None,
+            out, code = D.run(args(state_dir=d), FakePilot(alerts_file=Path(d) / "alerts.jsonl"), sleep=lambda s: None,
                               journal=lambda unit: ("", "journalctl exited 1"))
         self.assertEqual(code, 1)
         self.assertFalse(out["privacy"]["pass"])

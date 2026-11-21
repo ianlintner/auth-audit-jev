@@ -8,7 +8,8 @@ Phases: sequential latency, burst/queue pressure, privacy leak scan, kill-switch
 Safety: the admin bearer is only ever sent to a literal loopback IP address and
 redirects are never followed. The run refuses to start unless the audit plugin is
 enabled and attached, so it cannot report success against a pilot that was already
-killed; it resumes the pilot afterwards only because it required it to be enabled.
+killed. The rollback phase kills the pilot and leaves it killed: the driver never calls
+/pilot/resume, so it cannot undo an operator kill. Re-enable explicitly afterwards.
 """
 import argparse
 import ipaddress
@@ -71,6 +72,10 @@ def read_journal(unit):
     return proc.stdout, None
 
 
+def _records(text):
+    return sum(1 for line in text.splitlines() if line.strip())
+
+
 def pct(values, q):
     values = sorted(values)
     return values[max(1, -(-len(values) * q // 100)) - 1] if values else None
@@ -91,6 +96,11 @@ def run(args, api, journal=read_journal, sleep=time.sleep):
         out["error"] = "audit must be enabled with the plugin attached; nothing was run or changed"
         out["verdict"] = {"precondition_enabled_and_attached": False}
         return out, 2
+
+    try:
+        alerts_before = _records((Path(args.state_dir) / "alerts.jsonl").read_text())
+    except OSError:
+        alerts_before = 0
 
     # 1. Sequential: exact event-to-result/alert and decisions unchanged.
     decisions_ok, per = True, {}
@@ -130,10 +140,17 @@ def run(args, api, journal=read_journal, sleep=time.sleep):
     unavailable = []
     alerts_file = Path(args.state_dir) / "alerts.jsonl"
     alerts_expected = after["results"].get("alerted", 0) > 0 or any(v["alerts"] for v in per.values())
-    if alerts_file.exists():
-        surfaces["alerts_file"] = alerts_file.read_text()
-    elif alerts_expected:  # alerts fired, so a missing file is unavailable evidence, not a clean scan
-        unavailable.append({"surface": "alerts_file", "reason": f"expected alerts file missing: {alerts_file}"})
+    alerts_text = alerts_file.read_text() if alerts_file.exists() else None
+    if alerts_text is not None:
+        surfaces["alerts_file"] = alerts_text
+    if alerts_expected:
+        # Alerts fired, so a missing, empty or non-growing file is unavailable evidence, not a clean scan.
+        if alerts_text is None:
+            unavailable.append({"surface": "alerts_file", "reason": f"expected alerts file missing: {alerts_file}"})
+        elif _records(alerts_text) <= alerts_before:
+            surfaces.pop("alerts_file")
+            unavailable.append({"surface": "alerts_file",
+                                "reason": f"no alert records written during this run: {alerts_file}"})
     journal_text, journal_error = journal(args.unit)
     if journal_error:
         unavailable.append({"surface": "journal", "reason": journal_error})
@@ -156,7 +173,7 @@ def run(args, api, journal=read_journal, sleep=time.sleep):
                             "plugins_on_bus": pre_kill["plugins_on_bus"]}
         out["end_live_calls"] = calls_before
         out["verdict"] = {"decisions_unchanged": decisions_ok, "privacy_pass": out["privacy"]["pass"],
-                            "kill_switch_ok": False, "restored_initial_state": False}
+                            "kill_switch_ok": False}
         return out, 1
     saw_provider_call = calls_before > start_state["live_calls"]
     killed, took_kill = api("POST", "/pilot/kill")
@@ -166,16 +183,15 @@ def run(args, api, journal=read_journal, sleep=time.sleep):
     out["rollback"] = {"kill_response": killed, "kill_seconds": took_kill, "plugins_on_bus": st["plugins_on_bus"],
                        "decision_while_killed": r["decision"], "provider_calls_after_kill": st["live_calls"] - calls_before,
                        "provider_calls_during_run": calls_before - start_state["live_calls"]}
-    resumed, _ = api("POST", "/pilot/resume")  # safe: the run required the pilot to start enabled
-    final, _ = api("GET", "/pilot/state")
-    out["rollback"]["resume_response"] = resumed
-    out["rollback"]["final_state"] = final["state"]
-    out["end_live_calls"] = final["live_calls"]
+    # Deliberately NO automatic resume: any resume here could undo an operator kill that lands
+    # after the state check above. The pilot is left killed; the operator re-enables it explicitly.
+    out["rollback"]["final_state"] = st["state"]
+    out["rollback"]["left_killed_for_operator_resume"] = True
+    out["end_live_calls"] = st["live_calls"]
     out["verdict"] = {"decisions_unchanged": decisions_ok and r["decision"] == "deny",
                       "privacy_pass": out["privacy"]["pass"],
                       "kill_switch_ok": (saw_provider_call and st["plugins_on_bus"] == []
-                                         and out["rollback"]["provider_calls_after_kill"] == 0),
-                      "restored_initial_state": final["state"] == "enabled" and bool(final["plugins_on_bus"])}
+                                         and out["rollback"]["provider_calls_after_kill"] == 0)}
     return out, 0 if all(out["verdict"].values()) else 1
 
 
