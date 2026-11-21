@@ -215,6 +215,68 @@ class RunVerdictTests(unittest.TestCase):
         self.assertEqual(out["privacy"]["surfaces_unavailable"], [])
         self.assertTrue(out["privacy"]["pass"])
 
+    def test_alerts_unreadable_at_startup_is_unavailable_and_run_still_rolls_back(self):
+        # An existing file that cannot be read at startup must not become a zero baseline
+        # (stale records would then look fresh); the run continues through rollback.
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "alerts.jsonl").write_text('{"old": 1}\n')
+            real = Path.read_text
+
+            def read_text(self, *a, **kw):
+                if self.name == "alerts.jsonl":
+                    raise PermissionError(13, "Permission denied", str(self))
+                return real(self, *a, **kw)
+
+            with mock.patch.object(Path, "read_text", read_text):
+                out, code = D.run(args(state_dir=d), FakePilot(), journal=ok_journal, sleep=lambda s: None)
+        self.assertFalse(out["privacy"]["pass"])
+        self.assertEqual([u["surface"] for u in out["privacy"]["surfaces_unavailable"]], ["alerts_file"])
+        self.assertIn("unreadable at run start", out["privacy"]["surfaces_unavailable"][0]["reason"])
+        # Rollback still ran and is evaluated on its own evidence.
+        self.assertNotIn("skipped", out["rollback"])
+        self.assertTrue(out["verdict"]["kill_switch_ok"])
+        self.assertEqual(code, 1)
+
+    def test_alerts_unreadable_at_scan_time_is_unavailable_and_does_not_abort_rollback(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "alerts.jsonl").write_text("")
+            real = Path.read_text
+            state = {"failed": False}
+
+            def read_text(self, *a, **kw):
+                # First read is the baseline (succeeds); the scan-time read fails.
+                if self.name == "alerts.jsonl" and not state["failed"]:
+                    state["failed"] = True
+                    return real(self, *a, **kw)
+                if self.name == "alerts.jsonl":
+                    raise PermissionError(13, "Permission denied", str(self))
+                return real(self, *a, **kw)
+
+            with mock.patch.object(Path, "read_text", read_text):
+                out, code = D.run(args(state_dir=d), FakePilot(), journal=ok_journal, sleep=lambda s: None)
+        self.assertEqual(code, 1)
+        self.assertFalse(out["privacy"]["pass"])
+        self.assertEqual([u["surface"] for u in out["privacy"]["surfaces_unavailable"]], ["alerts_file"])
+        self.assertIn("unreadable at scan time", out["privacy"]["surfaces_unavailable"][0]["reason"])
+        self.assertNotIn("skipped", out["rollback"])          # reached rollback despite the read error
+        self.assertTrue(out["verdict"]["kill_switch_ok"])
+
+    def test_nonzero_starting_alert_count_unchanged_passes(self):
+        # Pre-existing alerts from an earlier run must not require this run's file to grow.
+        class PriorAlerts(FakePilot):
+            def snapshot(self):
+                snap = super().snapshot()
+                snap["results"] = {"alerted": 5}   # cumulative counter; this run adds nothing
+                return snap
+
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "alerts.jsonl").write_text("".join('{"old": %d}\n' % i for i in range(5)))
+            out, code = D.run(args(state_dir=d), PriorAlerts(), journal=ok_journal, sleep=lambda s: None)
+        self.assertEqual(code, 0, out["verdict"])
+        self.assertTrue(out["privacy"]["pass"])
+        self.assertEqual(out["privacy"]["surfaces_unavailable"], [])
+        self.assertIn("alerts_file", out["privacy"]["surfaces_scanned"])
+
     def test_journal_read_failure_is_unavailable_not_clean(self):
         with tempfile.TemporaryDirectory() as d:
             out, code = D.run(args(state_dir=d), FakePilot(alerts_file=Path(d) / "alerts.jsonl"), sleep=lambda s: None,

@@ -10,6 +10,11 @@ redirects are never followed. The run refuses to start unless the audit plugin i
 enabled and attached, so it cannot report success against a pilot that was already
 killed. The rollback phase kills the pilot and leaves it killed: the driver never calls
 /pilot/resume, so it cannot undo an operator kill. Re-enable explicitly afterwards.
+
+Alert-file evidence: only a missing file is treated as an empty baseline. Any other read
+failure is reported as unavailable evidence (and fails the privacy verdict) rather than a
+clean scan. Whether this run alerted is decided by the pilot's cumulative counter, so stale
+records from a prior run can neither satisfy nor fail the check.
 """
 import argparse
 import ipaddress
@@ -97,10 +102,18 @@ def run(args, api, journal=read_journal, sleep=time.sleep):
         out["verdict"] = {"precondition_enabled_and_attached": False}
         return out, 2
 
+    # Baseline for the alerts surface. Only a missing file means "no records yet"; any other
+    # read failure is unavailable evidence, not a zero baseline, because stale records could
+    # otherwise be counted as fresh evidence from this run.
+    alerts_file = Path(args.state_dir) / "alerts.jsonl"
+    alerts_before_error = None
     try:
-        alerts_before = _records((Path(args.state_dir) / "alerts.jsonl").read_text())
-    except OSError:
+        alerts_before = _records(alerts_file.read_text())
+    except FileNotFoundError:
         alerts_before = 0
+    except OSError as exc:
+        alerts_before = 0   # unused: alerts_before_error short-circuits the comparison
+        alerts_before_error = f"alerts file unreadable at run start: {exc.__class__.__name__}: {alerts_file}"
 
     # 1. Sequential: exact event-to-result/alert and decisions unchanged.
     decisions_ok, per = True, {}
@@ -138,19 +151,38 @@ def run(args, api, journal=read_journal, sleep=time.sleep):
     # 3. Privacy leak scan over every observable surface. Unreadable evidence is not a clean scan.
     surfaces = {"metrics": api("GET", "/metrics")[0], "state": json.dumps(after)}
     unavailable = []
-    alerts_file = Path(args.state_dir) / "alerts.jsonl"
-    alerts_expected = after["results"].get("alerted", 0) > 0 or any(v["alerts"] for v in per.values())
-    alerts_text = alerts_file.read_text() if alerts_file.exists() else None
+    if alerts_before_error:
+        unavailable.append({"surface": "alerts_file", "reason": alerts_before_error})
+    # The pilot's cumulative alerted counter is authoritative for whether this run produced an
+    # alert; the file must merely grow by that many records. Pre-existing alerts are irrelevant.
+    alerted_before = start_state["results"].get("alerted", 0)
+    alerted_after = after["results"].get("alerted", 0)
+    new_alerts = alerted_after - alerted_before
+    alerts_read_error = None
+    try:
+        alerts_text = alerts_file.read_text()
+    except FileNotFoundError:
+        alerts_text = None
+        if new_alerts > 0:
+            alerts_read_error = f"expected alerts file missing: {alerts_file}"
+    except OSError as exc:
+        alerts_text = None
+        alerts_read_error = f"alerts file unreadable at scan time: {exc.__class__.__name__}: {alerts_file}"
     if alerts_text is not None:
         surfaces["alerts_file"] = alerts_text
-    if alerts_expected:
-        # Alerts fired, so a missing, empty or non-growing file is unavailable evidence, not a clean scan.
-        if alerts_text is None:
-            unavailable.append({"surface": "alerts_file", "reason": f"expected alerts file missing: {alerts_file}"})
-        elif _records(alerts_text) <= alerts_before:
-            surfaces.pop("alerts_file")
-            unavailable.append({"surface": "alerts_file",
-                                "reason": f"no alert records written during this run: {alerts_file}"})
+    if not alerts_before_error:
+        if new_alerts > 0:
+            # This run alerted, so the file must hold a new record. Missing, unreadable, empty
+            # or non-growing evidence is unavailable, not a clean scan.
+            if alerts_text is None:
+                unavailable.append({"surface": "alerts_file", "reason": alerts_read_error})
+            elif _records(alerts_text) - alerts_before < new_alerts:
+                surfaces.pop("alerts_file")
+                unavailable.append({"surface": "alerts_file",
+                                    "reason": f"no new alert record written during this run: {alerts_file}"})
+        elif alerts_read_error:
+            # No alert was expected, but a read failure is still unavailable evidence.
+            unavailable.append({"surface": "alerts_file", "reason": alerts_read_error})
     journal_text, journal_error = journal(args.unit)
     if journal_error:
         unavailable.append({"surface": "journal", "reason": journal_error})
