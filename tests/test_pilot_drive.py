@@ -354,14 +354,51 @@ class RunVerdictTests(unittest.TestCase):
         self.assertEqual(out["privacy"]["canary_hits"], {})
 
     def test_read_journal_checks_exit_status(self):
-        failed = SimpleNamespace(returncode=1, stdout="", stderr="no access")
+        failed = SimpleNamespace(returncode=1, stdout=b"", stderr=b"no access")
         with mock.patch.object(D.subprocess, "run", return_value=failed):
             self.assertEqual(D.read_journal("u"), ("", "journalctl exited 1"))
         with mock.patch.object(D.subprocess, "run", side_effect=FileNotFoundError):
             self.assertIn("unavailable", D.read_journal("u")[1])
-        good = SimpleNamespace(returncode=0, stdout="text", stderr="")
+        good = SimpleNamespace(returncode=0, stdout=b"text", stderr=b"")
         with mock.patch.object(D.subprocess, "run", return_value=good):
             self.assertEqual(D.read_journal("u"), ("text", None))
+
+    def test_read_journal_captures_bytes_not_locale_text(self):
+        good = SimpleNamespace(returncode=0, stdout=b"ok", stderr=b"")
+        with mock.patch.object(D.subprocess, "run", return_value=good) as ran:
+            D.read_journal("u")
+        kwargs = ran.call_args.kwargs
+        self.assertTrue(kwargs.get("capture_output"))
+        self.assertFalse(kwargs.get("text"))
+        self.assertNotIn("encoding", kwargs)
+
+    def test_read_journal_undecodable_stdout_is_unavailable_not_raised(self):
+        bad = SimpleNamespace(returncode=0, stdout=b"ok \xff\xfe", stderr=b"")
+        with mock.patch.object(D.subprocess, "run", return_value=bad):
+            text, err = D.read_journal("u")
+        self.assertEqual(text, "")
+        self.assertIn("not valid UTF-8", err)
+
+    def test_read_journal_undecodable_stderr_never_raises(self):
+        for rc in (0, 1):
+            bad = SimpleNamespace(returncode=rc, stdout=b"fine", stderr=b"\xff\xfe")
+            with mock.patch.object(D.subprocess, "run", return_value=bad):
+                text, err = D.read_journal("u")   # must not raise
+            self.assertEqual((text, err), ("fine", None) if rc == 0 else ("", "journalctl exited 1"))
+
+    def test_undecodable_journal_fails_privacy_but_rollback_still_runs(self):
+        for bad in (SimpleNamespace(returncode=0, stdout=b"\xff\xfe", stderr=b""),
+                    SimpleNamespace(returncode=1, stdout=b"", stderr=b"\xff\xfe")):
+            with tempfile.TemporaryDirectory() as d, \
+                    mock.patch.object(D.subprocess, "run", return_value=bad):
+                pilot = FakePilot(alerts_file=Path(d) / "alerts.jsonl")
+                out, code = D.run(args(state_dir=d), pilot, sleep=lambda s: None)   # real read_journal
+            self.assertEqual(code, 1)
+            self.assertFalse(out["privacy"]["pass"])
+            self.assertEqual([u["surface"] for u in out["privacy"]["surfaces_unavailable"]], ["journal"])
+            self.assertNotIn("journal", out["privacy"]["surfaces_scanned"])
+            self.assertIn(("POST", "/pilot/kill"), pilot.log)   # rollback still ran
+            self.assertTrue(out["verdict"]["kill_switch_ok"])
 
 
 if __name__ == "__main__":

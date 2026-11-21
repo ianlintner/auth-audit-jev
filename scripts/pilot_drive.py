@@ -15,6 +15,10 @@ Alert-file evidence: only a missing file is treated as an empty baseline. Any ot
 failure is reported as unavailable evidence (and fails the privacy verdict) rather than a
 clean scan. Whether this run alerted is decided by the pilot's cumulative counter, so stale
 records from a prior run can neither satisfy nor fail the check.
+
+Journal evidence: journalctl output is captured as bytes and decoded explicitly as UTF-8.
+A non-zero exit, a missing binary, or an undecodable stdout stream is unavailable evidence
+and fails the privacy verdict, but never aborts the run before the rollback phase.
 """
 import argparse
 import ipaddress
@@ -67,14 +71,28 @@ def call(base, method, path, token):
 
 
 def read_journal(unit):
-    """Return (text, error). error is None only when journalctl exited 0."""
+    """Return (text, error). error is None only when journalctl exited 0 and stdout decoded.
+
+    Both streams are captured as bytes and decoded explicitly as UTF-8, never with the
+    process's locale default, so the result does not depend on the environment. A journal
+    failure or undecodable output is unavailable evidence, never a clean scan, and it must
+    not raise: the run still has to reach the rollback phase.
+    """
     try:
-        proc = subprocess.run(["journalctl", "--user", "-u", unit, "--no-pager"], capture_output=True, text=True)
+        proc = subprocess.run(["journalctl", "--user", "-u", unit, "--no-pager"], capture_output=True)
     except OSError as exc:
         return "", f"journalctl unavailable: {exc.__class__.__name__}"
     if proc.returncode != 0:
         return "", f"journalctl exited {proc.returncode}"
-    return proc.stdout, None
+    # stderr is diagnostics only: undecodable bytes there must not fail the read, so they are
+    # replaced rather than raised. stdout is evidence, so its decoding failure is reported.
+    try:
+        if isinstance(proc.stderr, (bytes, bytearray)):
+            proc.stderr.decode("utf-8", errors="replace")
+        stdout = proc.stdout.decode("utf-8") if isinstance(proc.stdout, (bytes, bytearray)) else proc.stdout
+    except UnicodeDecodeError:
+        return "", "journalctl output is not valid UTF-8"
+    return stdout, None
 
 
 def read_alerts(path):
