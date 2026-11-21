@@ -149,7 +149,7 @@ class RunVerdictTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertFalse(out["privacy"]["pass"])
         self.assertEqual([u["surface"] for u in out["privacy"]["surfaces_unavailable"]], ["alerts_file"])
-        self.assertNotIn("alerts_file", out["privacy"]["surfaces_scanned"])
+        self.assertIn("alerts_file", out["privacy"]["surfaces_scanned"])   # readable bytes are still scanned
 
     def test_stale_alerts_from_prior_run_do_not_count(self):
         with tempfile.TemporaryDirectory() as d:
@@ -260,6 +260,56 @@ class RunVerdictTests(unittest.TestCase):
         self.assertIn("unreadable at scan time", out["privacy"]["surfaces_unavailable"][0]["reason"])
         self.assertNotIn("skipped", out["rollback"])          # reached rollback despite the read error
         self.assertTrue(out["verdict"]["kill_switch_ok"])
+
+    def test_invalid_utf8_alerts_at_scan_time_is_unavailable_and_still_kills(self):
+        class Corrupting(FakePilot):
+            def __call__(self, method, path):
+                if path == "/metrics":   # corrupt the file after the baseline read, before the scan
+                    with open(self.alerts_file, "ab") as fh:
+                        fh.write(b"\xff\xfe\n")
+                return super().__call__(method, path)
+
+        with tempfile.TemporaryDirectory() as d:
+            pilot = Corrupting(alerts_file=Path(d) / "alerts.jsonl")
+            out, code = D.run(args(state_dir=d), pilot, journal=ok_journal, sleep=lambda s: None)
+        self.assertEqual(code, 1)
+        self.assertFalse(out["privacy"]["pass"])
+        self.assertEqual([u["surface"] for u in out["privacy"]["surfaces_unavailable"]], ["alerts_file"])
+        self.assertIn("UnicodeDecodeError", out["privacy"]["surfaces_unavailable"][0]["reason"])
+        self.assertIn(("POST", "/pilot/kill"), pilot.log)       # rollback still ran
+        self.assertNotIn("skipped", out["rollback"])
+        self.assertTrue(out["verdict"]["kill_switch_ok"])
+
+    def test_invalid_utf8_alerts_at_startup_is_unavailable(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "alerts.jsonl").write_bytes(b"\xff\n")
+            pilot = FakePilot(alerts_file=Path(d) / "alerts.jsonl")
+            out, code = D.run(args(state_dir=d), pilot, journal=ok_journal, sleep=lambda s: None)
+        self.assertEqual(code, 1)
+        self.assertIn("unreadable at run start", out["privacy"]["surfaces_unavailable"][0]["reason"])
+        self.assertIn(("POST", "/pilot/kill"), pilot.log)
+
+    def test_canary_in_partial_alerts_file_is_reported_with_missing_records(self):
+        class Partial(FakePilot):
+            target = None
+
+            def __call__(self, method, path):
+                body, t = super().__call__(method, path)   # base writes nothing: alerts_file stays None
+                if path.startswith("/pilot/synthetic") and self.live_calls == 1:
+                    with open(self.target, "a") as fh:   # only one record, and it leaks
+                        fh.write('{"user": "CANARY_USER_7f3a"}\n')
+                return body, t
+
+        with tempfile.TemporaryDirectory() as d:
+            pilot = Partial()
+            pilot.target = Path(d) / "alerts.jsonl"
+            out, code = D.run(args(state_dir=d), pilot, journal=ok_journal, sleep=lambda s: None)
+        self.assertEqual(code, 1)
+        self.assertFalse(out["privacy"]["pass"])
+        self.assertEqual(out["privacy"]["canary_hits"], {"alerts_file": ["CANARY_USER_7f3a"]})
+        self.assertEqual([u["surface"] for u in out["privacy"]["surfaces_unavailable"]], ["alerts_file"])
+        self.assertIn("no new alert record", out["privacy"]["surfaces_unavailable"][0]["reason"])
+        self.assertIn("alerts_file", out["privacy"]["surfaces_scanned"])
 
     def test_nonzero_starting_alert_count_unchanged_passes(self):
         # Pre-existing alerts from an earlier run must not require this run's file to grow.

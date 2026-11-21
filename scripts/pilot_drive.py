@@ -77,6 +77,25 @@ def read_journal(unit):
     return proc.stdout, None
 
 
+def read_alerts(path):
+    """Return (text, error). error is None, "missing", or an exception class name.
+
+    text is whatever could be read: invalid UTF-8 is decoded with replacement (error
+    "UnicodeDecodeError") so the readable content can still be scanned for canaries.
+    """
+    try:
+        return path.read_text(), None
+    except FileNotFoundError:
+        return None, "missing"
+    except UnicodeDecodeError:
+        try:
+            return path.read_bytes().decode("utf-8", errors="replace"), "UnicodeDecodeError"
+        except OSError as exc:
+            return None, exc.__class__.__name__
+    except OSError as exc:
+        return None, exc.__class__.__name__
+
+
 def _records(text):
     return sum(1 for line in text.splitlines() if line.strip())
 
@@ -107,13 +126,10 @@ def run(args, api, journal=read_journal, sleep=time.sleep):
     # otherwise be counted as fresh evidence from this run.
     alerts_file = Path(args.state_dir) / "alerts.jsonl"
     alerts_before_error = None
-    try:
-        alerts_before = _records(alerts_file.read_text())
-    except FileNotFoundError:
-        alerts_before = 0
-    except OSError as exc:
-        alerts_before = 0   # unused: alerts_before_error short-circuits the comparison
-        alerts_before_error = f"alerts file unreadable at run start: {exc.__class__.__name__}: {alerts_file}"
+    before_text, before_err = read_alerts(alerts_file)
+    alerts_before = _records(before_text) if before_text else 0   # unused if errored
+    if before_err and before_err != "missing":   # only a missing file is an empty baseline
+        alerts_before_error = f"alerts file unreadable at run start: {before_err}: {alerts_file}"
 
     # 1. Sequential: exact event-to-result/alert and decisions unchanged.
     decisions_ok, per = True, {}
@@ -159,30 +175,24 @@ def run(args, api, journal=read_journal, sleep=time.sleep):
     alerted_after = after["results"].get("alerted", 0)
     new_alerts = alerted_after - alerted_before
     alerts_read_error = None
-    try:
-        alerts_text = alerts_file.read_text()
-    except FileNotFoundError:
-        alerts_text = None
+    alerts_text, scan_err = read_alerts(alerts_file)
+    if scan_err == "missing":
         if new_alerts > 0:
             alerts_read_error = f"expected alerts file missing: {alerts_file}"
-    except OSError as exc:
-        alerts_text = None
-        alerts_read_error = f"alerts file unreadable at scan time: {exc.__class__.__name__}: {alerts_file}"
+    elif scan_err:
+        alerts_read_error = f"alerts file unreadable at scan time: {scan_err}: {alerts_file}"
+    # Always scan whatever bytes were readable (including undecodable or partial files):
+    # a completeness or decoding problem must not hide a canary that is actually present.
     if alerts_text is not None:
         surfaces["alerts_file"] = alerts_text
     if not alerts_before_error:
-        if new_alerts > 0:
-            # This run alerted, so the file must hold a new record. Missing, unreadable, empty
-            # or non-growing evidence is unavailable, not a clean scan.
-            if alerts_text is None:
-                unavailable.append({"surface": "alerts_file", "reason": alerts_read_error})
-            elif _records(alerts_text) - alerts_before < new_alerts:
-                surfaces.pop("alerts_file")
-                unavailable.append({"surface": "alerts_file",
-                                    "reason": f"no new alert record written during this run: {alerts_file}"})
-        elif alerts_read_error:
-            # No alert was expected, but a read failure is still unavailable evidence.
+        if alerts_read_error:
             unavailable.append({"surface": "alerts_file", "reason": alerts_read_error})
+        elif new_alerts > 0 and _records(alerts_text) - alerts_before < new_alerts:
+            # This run alerted, so the file must hold the new records. Empty or non-growing
+            # evidence is unavailable (reported separately from any canary hits).
+            unavailable.append({"surface": "alerts_file",
+                                "reason": f"no new alert record written during this run: {alerts_file}"})
     journal_text, journal_error = journal(args.unit)
     if journal_error:
         unavailable.append({"surface": "journal", "reason": journal_error})
